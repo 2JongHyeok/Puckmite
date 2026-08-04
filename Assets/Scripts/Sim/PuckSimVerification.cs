@@ -32,6 +32,8 @@ namespace Puckmite.Sim
                 DeterminismCheck(),
                 FrictionStoppingDistanceCheck(),
                 MomentumConservationCheck(),
+                EventDeterminismCheck(),
+                EventEmissionCheck(),
             };
         }
 
@@ -104,6 +106,162 @@ namespace Puckmite.Sim
             return new CheckResult("Momentum conservation", passed, detail);
         }
 
+        /// <summary>Two runs from the same initial state must produce identical event streams, not just identical positions.</summary>
+        public static CheckResult EventDeterminismCheck()
+        {
+            // Aim puck 0 (at (-6,-6)) straight at puck 1 (at (2,3)) with enough speed to collide and
+            // then scatter into the walls, so the stream contains both event kinds. A 0-event stream
+            // would make this check vacuous, so a puck collision is also required below.
+            Vector2 launch = new Vector2(16f, 18f);
+            List<PuckSimEvent> first = CollectEvents(BuildCollisionScene(), 0, launch);
+            List<PuckSimEvent> second = CollectEvents(BuildCollisionScene(), 0, launch);
+
+            int collisions = 0;
+            int wallBounces = 0;
+            for (int i = 0; i < first.Count; i++)
+            {
+                if (first[i].Type == PuckSimEventType.PuckCollision)
+                {
+                    collisions++;
+                }
+                else
+                {
+                    wallBounces++;
+                }
+            }
+
+            bool matched = EventsEqual(first, second, out string difference);
+            if (!matched)
+            {
+                return new CheckResult("Event determinism", false, difference);
+            }
+
+            if (collisions < 1)
+            {
+                return new CheckResult("Event determinism", false,
+                    $"Vacuous: the two streams matched but had {first.Count} events and no puck collision to compare.");
+            }
+
+            return new CheckResult("Event determinism", true,
+                $"Two runs matched: {first.Count} events ({collisions} collisions, {wallBounces} wall bounces).");
+        }
+
+        /// <summary>
+        /// Events fire with the right identities and counts: a head-on impact emits exactly one
+        /// PuckCollision (and no wall bounce, and no per-step spam), and a corner hit emits two wall
+        /// bounces in a single step.
+        /// </summary>
+        public static CheckResult EventEmissionCheck()
+        {
+            // Head-on, frictionless, board large enough that no wall is ever reached.
+            PuckSim head = new PuckSim(new Vector2(-100f, -100f), new Vector2(100f, 100f), 0f, 1f, 0f);
+            head.AddPuck(new Puck(0, new Vector2(-5f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(5f, 0f) });
+            head.AddPuck(new Puck(1, new Vector2(5f, 0f), 0.5f, 1f, PuckOwner.Enemy) { Velocity = new Vector2(-5f, 0f) });
+
+            int collisionCount = 0;
+            int headWallCount = 0;
+            PuckSimEvent collision = default;
+            for (int step = 0; step < 400; step++) // long enough to meet and fully separate
+            {
+                IReadOnlyList<PuckSimEvent> events = head.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.PuckCollision)
+                    {
+                        collisionCount++;
+                        collision = events[i];
+                    }
+                    else
+                    {
+                        headWallCount++;
+                    }
+                }
+            }
+
+            bool collisionOk =
+                collisionCount == 1 &&
+                collision.Type == PuckSimEventType.PuckCollision &&
+                collision.PuckA == 0 && collision.PuckB == 1 &&
+                collision.Impulse > 0f &&
+                headWallCount == 0;
+
+            // Corner hit: velocity steep enough that one step crosses both the x and y walls at once.
+            PuckSim corner = new PuckSim(new Vector2(0f, 0f), new Vector2(10f, 10f), 0f, 1f, 0.01f);
+            corner.AddPuck(new Puck(5, new Vector2(1f, 1f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(-100f, -100f) });
+
+            IReadOnlyList<PuckSimEvent> cornerEvents = corner.Step();
+            int cornerWallCount = 0;
+            bool cornerIdsOk = true;
+            for (int i = 0; i < cornerEvents.Count; i++)
+            {
+                if (cornerEvents[i].Type == PuckSimEventType.WallBounce)
+                {
+                    cornerWallCount++;
+                    if (cornerEvents[i].PuckA != 5)
+                    {
+                        cornerIdsOk = false;
+                    }
+                }
+            }
+
+            bool cornerOk = cornerWallCount == 2 && cornerIdsOk;
+            bool passed = collisionOk && cornerOk;
+            string detail =
+                $"head-on: collisions={collisionCount} (expect 1), impulse={collision.Impulse:F3}, walls={headWallCount} (expect 0); " +
+                $"corner: wallBounces={cornerWallCount} (expect 2), idsOk={cornerIdsOk}.";
+            return new CheckResult("Event emission", passed, detail);
+        }
+
+        // Drives the sim one step at a time, launching the given puck, and copies every step's events
+        // out of the reused buffer into one list until the sim comes to rest (or hits the step cap).
+        private static List<PuckSimEvent> CollectEvents(PuckSim sim, int puckId, Vector2 launch, int maxSteps = 100000)
+        {
+            sim.SetVelocity(puckId, launch);
+            List<PuckSimEvent> collected = new List<PuckSimEvent>();
+            int steps = 0;
+            while (steps < maxSteps && !sim.AllAtRest())
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    collected.Add(events[i]);
+                }
+
+                steps++;
+            }
+
+            return collected;
+        }
+
+        private static bool EventsEqual(List<PuckSimEvent> a, List<PuckSimEvent> b, out string difference)
+        {
+            if (a.Count != b.Count)
+            {
+                difference = $"Event count differs: {a.Count} vs {b.Count}.";
+                return false;
+            }
+
+            for (int i = 0; i < a.Count; i++)
+            {
+                PuckSimEvent x = a[i];
+                PuckSimEvent y = b[i];
+                bool same =
+                    x.Type == y.Type &&
+                    x.PuckA == y.PuckA &&
+                    x.PuckB == y.PuckB &&
+                    x.Impulse == y.Impulse;
+
+                if (!same)
+                {
+                    difference = $"Event index {i} differs: {Format(x)} vs {Format(y)}.";
+                    return false;
+                }
+            }
+
+            difference = string.Empty;
+            return true;
+        }
+
         // A scene that exercises friction, wall bounces, and puck-to-puck collisions at once, so the
         // determinism check covers every code path rather than a single straight shot.
         private static PuckSim BuildCollisionScene()
@@ -172,6 +330,13 @@ namespace Puckmite.Sim
         private static string Format(Vector2 v)
         {
             return $"({v.x:R}, {v.y:R})";
+        }
+
+        private static string Format(PuckSimEvent e)
+        {
+            return e.Type == PuckSimEventType.WallBounce
+                ? $"WallBounce(puck {e.PuckA})"
+                : $"PuckCollision({e.PuckA}, {e.PuckB}, impulse {e.Impulse:R})";
         }
     }
 }

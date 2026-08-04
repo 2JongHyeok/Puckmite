@@ -24,6 +24,10 @@ namespace Puckmite.Sim
         private readonly float _restitution;   // puck-to-puck bounciness, [0, 1]
         private readonly float _restThreshold; // speed (units/s) at or below which a puck snaps to rest
 
+        // Events produced by the current Step(). Allocated once and cleared each step so headless
+        // roll-outs never allocate. The buffer is handed back from Step() and overwritten by the next.
+        private readonly List<PuckSimEvent> _events = new List<PuckSimEvent>();
+
         public PuckSim(Vector2 boardMin, Vector2 boardMax, float friction, float restitution, float restThreshold)
         {
             _pucks = new List<Puck>();
@@ -77,9 +81,15 @@ namespace Puckmite.Sim
             return true;
         }
 
-        /// <summary>Advances the whole simulation by one fixed timestep.</summary>
-        public void Step()
+        /// <summary>
+        /// Advances the whole simulation by one fixed timestep and returns the events that occurred
+        /// during it (wall bounces, puck-to-puck impacts). The returned list is a buffer reused by the
+        /// next <see cref="Step"/> call, so read it before stepping again.
+        /// </summary>
+        public IReadOnlyList<PuckSimEvent> Step()
         {
+            _events.Clear();
+
             // Friction, then integrate position.
             for (int i = 0; i < _pucks.Count; i++)
             {
@@ -105,6 +115,8 @@ namespace Puckmite.Sim
                 ResolveWalls(ref p);
                 _pucks[i] = p;
             }
+
+            return _events;
         }
 
         /// <summary>True when every puck has exactly zero velocity.</summary>
@@ -213,6 +225,7 @@ namespace Puckmite.Sim
                 {
                     p.Velocity = new Vector2(-p.Velocity.x, p.Velocity.y);
                     p.BounceCount++;
+                    _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
             }
             else if (p.Position.x > maxX)
@@ -222,6 +235,7 @@ namespace Puckmite.Sim
                 {
                     p.Velocity = new Vector2(-p.Velocity.x, p.Velocity.y);
                     p.BounceCount++;
+                    _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
             }
 
@@ -232,6 +246,7 @@ namespace Puckmite.Sim
                 {
                     p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y);
                     p.BounceCount++;
+                    _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
             }
             else if (p.Position.y > maxY)
@@ -241,6 +256,7 @@ namespace Puckmite.Sim
                 {
                     p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y);
                     p.BounceCount++;
+                    _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
             }
         }
@@ -277,7 +293,9 @@ namespace Puckmite.Sim
             a.Position -= correction * invMassA;
             b.Position += correction * invMassB;
 
-            // Normal impulse with restitution, only when the pucks are moving toward each other.
+            // Normal impulse with restitution, only when the pucks are moving toward each other. The
+            // collision event fires here (not on mere overlap) so resting contact — corrected every
+            // step but not approaching — does not spam a hit every frame.
             Vector2 relativeVelocity = b.Velocity - a.Velocity;
             float velocityAlongNormal = Vector2.Dot(relativeVelocity, normal);
             if (velocityAlongNormal < 0f)
@@ -286,6 +304,7 @@ namespace Puckmite.Sim
                 Vector2 impulse = normal * impulseMagnitude;
                 a.Velocity -= impulse * invMassA;
                 b.Velocity += impulse * invMassB;
+                _events.Add(PuckSimEvent.PuckCollision(a.Id, b.Id, impulseMagnitude));
             }
 
             _pucks[i] = a;

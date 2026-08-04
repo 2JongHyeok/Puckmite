@@ -369,10 +369,13 @@ Assets/Scripts/View   렌더링, 입력
   - `Simulate(puckId, initialVelocity)` — 전부 정지할 때까지 헤드리스 실행
   - `Clone()` — 전체 상태 깊은 복사
   - 고정 타임스텝 1/120, 무작위성 없음, UnityEngine 의존은 Vector2뿐
-- 검증 코드 3종
+  - `Step()`이 이벤트 리스트 반환 — `WallBounce(id)`, `PuckCollision(a, b, impulse)`. 한 번 할당한 버퍼를 Clear해 재사용
+- 검증 코드 5종
   - 같은 초기 상태에서 Simulate 두 번 → 동일 결과
   - 속도 v로 발사 시 v²/(2a)의 1% 이내에서 정지
   - 정면 충돌 시 운동량 보존
+  - 이벤트 결정론 — 같은 발사 두 번의 이벤트열이 완전 일치 (충돌 1회 이상 요구)
+  - 이벤트 발생 — 정면충돌 1회, 코너 2회 등 발생 개수·대상 Id 일치
 
 **아직 없는 것** — MonoBehaviour, 씬, 렌더링, 입력 전부
 
@@ -382,9 +385,9 @@ Assets/Scripts/View   렌더링, 입력
 
 **Sim 단계**
 
-1. `Step()`이 이벤트 리스트 반환 — `WallBounce`, `PuckCollision`
+1. ✅ **완료** — `Step()`이 이벤트 리스트 반환 — `WallBounce`, `PuckCollision`
    (리스트는 한 번 할당하고 Clear해서 재사용)
-2. Sim 안정화 — Id 오름차순 충돌 해결, 서브스텝(터널링 방지),
+2. ⬅ **다음** — Sim 안정화 — Id 오름차순 충돌 해결, 서브스텝(터널링 방지),
    `Simulate()` 최대 스텝 캡, 물리 파라미터 설정 클래스 분리
 
 **View 단계**
