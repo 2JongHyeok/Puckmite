@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Puckmite.Sim;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -6,18 +7,18 @@ using UnityEngine.Rendering.Universal;
 namespace Puckmite.View
 {
     /// <summary>
-    /// Single-puck sandbox that makes the deterministic <see cref="PuckSim"/> visible and touchable.
-    /// It builds the camera, board, walls and puck procedurally at runtime (design doc 7.9 — no scene
+    /// Multi-puck sandbox that makes the deterministic <see cref="PuckSim"/> visible and touchable. It
+    /// builds the camera, board, walls and pucks procedurally at runtime (design doc 7.9 — no scene
     /// file, no imported art), drives the sim with a fixed-timestep accumulator, and lets the player
-    /// drag-and-release to fling the puck. Rendering only reads the sim; the one write is the launch
-    /// velocity. Physics fields are placeholders (the real numbers are 미정 in the design doc) exposed
-    /// as on-screen sliders so the feel can be tuned live.
+    /// grab any puck (click near it, drag, release) to fling it into the others. Rendering only reads
+    /// the sim; the one write is the launch velocity. Physics fields are placeholders (the real numbers
+    /// are 미정 in the design doc) exposed as on-screen sliders so the feel can be tuned live.
     /// </summary>
     public sealed class PuckmitePlaytest : MonoBehaviour
     {
         [Header("Physics — temporary placeholders, tune by feel (values are 미정 in the design doc)")]
         [SerializeField] private float _friction = 12f;       // constant deceleration, units/s^2
-        [SerializeField] private float _restitution = 0.85f;  // puck-to-puck bounciness (unused with one puck)
+        [SerializeField] private float _restitution = 0.85f;  // puck-to-puck bounciness
         [SerializeField] private float _restThreshold = 0.05f;
         [SerializeField] private float _maxPower = 45f;        // speed cap on a launch
         [SerializeField] private float _powerScale = 4f;       // drag distance (world units) -> launch speed
@@ -29,21 +30,24 @@ namespace Puckmite.View
         // Board: 5 cells of side 5 => 25 units across, centred on the origin.
         private const float BoardHalf = 12.5f;
         private const float InnerHalf = 7.5f; // inner 3x3 buff zone spans cells 1..3
-        private const int PuckId = 0;
         private const float MinDrag = 0.3f;        // ignore tiny drags so a click does not fling
         private const float MaxAccumulated = 0.1f; // clamp so a hitch cannot trigger a step burst
         private const int MaxStepsPerFrame = 4000;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 350f);
+        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 360f);
 
         private PuckSim _sim;
         private Camera _camera;
-        private Transform _puck;
+        private SpriteRenderer[] _puckViews; // indexed by puck Id (layout uses contiguous Ids from 0)
         private SpriteRenderer _aimLine;
 
         private float _accumulator;
         private bool _aiming;
+        private int _aimingPuckId = -1;
         private float _currentPowerFraction;
+
+        private int _wallBounceTotal; // session tallies, straight from Step()'s events
+        private int _collisionTotal;
 
         // Physics values currently baked into _sim; a mismatch with the fields triggers a rebuild.
         private float _appliedFriction;
@@ -52,12 +56,12 @@ namespace Puckmite.View
 
         private void Awake()
         {
-            BuildSim(Vector2.zero, Vector2.zero, 0);
+            BuildSimFrom(InitialLayout());
             BuildCamera();
             BuildBoard();
-            BuildPuck();
+            BuildPuckViews();
             BuildAimLine();
-            UpdatePuckTransform();
+            UpdatePuckTransforms();
         }
 
         private void Update()
@@ -65,24 +69,37 @@ namespace Puckmite.View
             RebuildIfPhysicsChanged();
             HandleInput();
             DriveSimulation();
-            UpdatePuckTransform();
+            UpdatePuckTransforms();
         }
 
         // --- Simulation ---------------------------------------------------------------------------
 
-        private void BuildSim(Vector2 position, Vector2 velocity, int bounceCount)
+        private List<Puck> InitialLayout()
+        {
+            // Player pucks down the left ("hand" side), an enemy cluster in the middle, spaced so none
+            // start overlapping. Ids are contiguous from 0 so the view array can be indexed by Id.
+            return new List<Puck>
+            {
+                new Puck(0, new Vector2(-9f, -9f), _puckRadius, 1f, PuckOwner.Player),
+                new Puck(1, new Vector2(-9f, 0f), _puckRadius, 1f, PuckOwner.Player),
+                new Puck(2, new Vector2(-9f, 9f), _puckRadius, 1f, PuckOwner.Player),
+                new Puck(3, new Vector2(0f, 0f), _puckRadius, 1f, PuckOwner.Enemy),
+                new Puck(4, new Vector2(4f, 4f), _puckRadius, 1f, PuckOwner.Enemy),
+                new Puck(5, new Vector2(4f, -4f), _puckRadius, 1f, PuckOwner.Enemy),
+            };
+        }
+
+        private void BuildSimFrom(List<Puck> pucks)
         {
             _sim = new PuckSim(
                 new Vector2(-BoardHalf, -BoardHalf),
                 new Vector2(BoardHalf, BoardHalf),
                 _friction, _restitution, _restThreshold);
 
-            Puck puck = new Puck(PuckId, position, _puckRadius, 1f, PuckOwner.Player)
+            for (int i = 0; i < pucks.Count; i++)
             {
-                Velocity = velocity,
-                BounceCount = bounceCount,
-            };
-            _sim.AddPuck(puck);
+                _sim.AddPuck(pucks[i]);
+            }
 
             _appliedFriction = _friction;
             _appliedRestitution = _restitution;
@@ -100,19 +117,21 @@ namespace Puckmite.View
                 return;
             }
 
-            // Rebuild in place, preserving where the puck is and how it is moving, so a slider tweak
-            // is felt immediately even mid-roll.
-            Vector2 position = Vector2.zero;
-            Vector2 velocity = Vector2.zero;
-            int bounceCount = 0;
-            if (_sim.TryGetPuck(PuckId, out Puck existing))
+            // Rebuild in place, preserving every puck exactly as it is now (position, velocity, bounces),
+            // so a slider tweak is felt immediately even mid-roll.
+            BuildSimFrom(SnapshotPucks());
+        }
+
+        private List<Puck> SnapshotPucks()
+        {
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            List<Puck> copy = new List<Puck>(pucks.Count);
+            for (int i = 0; i < pucks.Count; i++)
             {
-                position = existing.Position;
-                velocity = existing.Velocity;
-                bounceCount = existing.BounceCount;
+                copy.Add(pucks[i]);
             }
 
-            BuildSim(position, velocity, bounceCount);
+            return copy;
         }
 
         private void DriveSimulation()
@@ -132,17 +151,31 @@ namespace Puckmite.View
             int steps = 0;
             while (_accumulator >= PuckSim.Dt && steps < MaxStepsPerFrame)
             {
-                _sim.Step();
+                IReadOnlyList<PuckSimEvent> events = _sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.WallBounce)
+                    {
+                        _wallBounceTotal++;
+                    }
+                    else
+                    {
+                        _collisionTotal++;
+                    }
+                }
+
                 _accumulator -= PuckSim.Dt;
                 steps++;
             }
         }
 
-        private void ResetPuck()
+        private void ResetPucks()
         {
-            BuildSim(Vector2.zero, Vector2.zero, 0);
+            BuildSimFrom(InitialLayout());
             _accumulator = 0f;
-            UpdatePuckTransform();
+            _wallBounceTotal = 0;
+            _collisionTotal = 0;
+            UpdatePuckTransforms();
         }
 
         // --- Input --------------------------------------------------------------------------------
@@ -157,16 +190,20 @@ namespace Puckmite.View
 
             Vector2 screen = mouse.position.ReadValue();
             Vector2 world = ScreenToWorld(screen);
-            Vector2 puckPos = _sim.TryGetPuck(PuckId, out Puck p) ? p.Position : Vector2.zero;
 
             if (mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen))
             {
-                _aiming = true;
+                int id = NearestPuckId(world);
+                if (id >= 0)
+                {
+                    _aiming = true;
+                    _aimingPuckId = id;
+                }
             }
 
-            if (_aiming)
+            if (_aiming && _sim.TryGetPuck(_aimingPuckId, out Puck aimPuck))
             {
-                UpdateAimLine(puckPos, world);
+                UpdateAimLine(aimPuck.Position, world);
             }
 
             if (mouse.leftButton.wasReleasedThisFrame && _aiming)
@@ -174,14 +211,40 @@ namespace Puckmite.View
                 _aiming = false;
                 _aimLine.gameObject.SetActive(false);
 
-                Vector2 drag = world - puckPos;
-                if (drag.magnitude >= MinDrag)
+                if (_sim.TryGetPuck(_aimingPuckId, out Puck p))
                 {
-                    float power = Mathf.Min(drag.magnitude * _powerScale, _maxPower);
-                    _sim.SetVelocity(PuckId, drag.normalized * power);
-                    _accumulator = 0f;
+                    Vector2 drag = world - p.Position;
+                    if (drag.magnitude >= MinDrag)
+                    {
+                        float power = Mathf.Min(drag.magnitude * _powerScale, _maxPower);
+                        _sim.SetVelocity(_aimingPuckId, drag.normalized * power);
+                        _accumulator = 0f;
+                    }
+                }
+
+                _aimingPuckId = -1;
+            }
+        }
+
+        // Closest puck to the point, if within a forgiving grab radius; -1 if the click is in open space.
+        private int NearestPuckId(Vector2 world)
+        {
+            float grab = Mathf.Max(_puckRadius * 2.5f, 3f);
+            float bestSqr = grab * grab;
+            int best = -1;
+
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                float sqr = (pucks[i].Position - world).sqrMagnitude;
+                if (sqr <= bestSqr)
+                {
+                    bestSqr = sqr;
+                    best = pucks[i].Id;
                 }
             }
+
+            return best;
         }
 
         private Vector2 ScreenToWorld(Vector2 screen)
@@ -267,17 +330,27 @@ namespace Puckmite.View
             return sr;
         }
 
-        private void BuildPuck()
+        private void BuildPuckViews()
         {
-            GameObject go = new GameObject("Puck");
-            go.transform.SetParent(transform, false);
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            _puckViews = new SpriteRenderer[pucks.Count];
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                Puck p = pucks[i];
+                GameObject go = new GameObject($"Puck{p.Id}");
+                go.transform.SetParent(transform, false);
 
-            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = ProceduralSprites.Circle();
-            sr.color = new Color(0.30f, 0.75f, 1f); // player colour
-            sr.sortingOrder = 10;
+                SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = ProceduralSprites.Circle();
+                sr.color = OwnerColor(p.Owner);
+                sr.sortingOrder = 10;
+                _puckViews[p.Id] = sr;
+            }
+        }
 
-            _puck = go.transform;
+        private static Color OwnerColor(PuckOwner owner)
+        {
+            return owner == PuckOwner.Player ? new Color(0.30f, 0.75f, 1f) : new Color(1f, 0.45f, 0.35f);
         }
 
         private void BuildAimLine()
@@ -291,16 +364,17 @@ namespace Puckmite.View
             go.SetActive(false);
         }
 
-        private void UpdatePuckTransform()
+        private void UpdatePuckTransforms()
         {
-            if (!_sim.TryGetPuck(PuckId, out Puck p))
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
             {
-                return;
+                Puck p = pucks[i];
+                Transform t = _puckViews[p.Id].transform;
+                t.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+                float diameter = p.Radius * 2f;
+                t.localScale = new Vector3(diameter, diameter, 1f);
             }
-
-            _puck.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
-            float diameter = p.Radius * 2f;
-            _puck.localScale = new Vector3(diameter, diameter, 1f);
         }
 
         private void UpdateAimLine(Vector2 from, Vector2 to)
@@ -341,10 +415,8 @@ namespace Puckmite.View
             GUILayout.BeginArea(new Rect(HudRect.x, HudRect.y, HudRect.width, HudRect.height), GUI.skin.box);
 
             GUILayout.Label("Puckmite Playtest");
-            _sim.TryGetPuck(PuckId, out Puck p);
-            GUILayout.Label($"Bounces: {p.BounceCount}");
-            GUILayout.Label($"Speed: {p.Velocity.magnitude:F1}");
-            GUILayout.Label($"At rest: {_sim.AllAtRest()}");
+            GUILayout.Label($"Pucks: {_sim.Pucks.Count}    At rest: {_sim.AllAtRest()}");
+            GUILayout.Label($"Wall bounces: {_wallBounceTotal}    Collisions: {_collisionTotal}");
             GUILayout.Label(_aiming ? $"Power: {_currentPowerFraction * 100f:F0}%" : "Power: -");
 
             GUILayout.Space(6f);
@@ -374,12 +446,12 @@ namespace Puckmite.View
             }
             GUILayout.EndHorizontal();
 
-            if (GUILayout.Button("Reset puck"))
+            if (GUILayout.Button("Reset pucks"))
             {
-                ResetPuck();
+                ResetPucks();
             }
 
-            GUILayout.Label("Drag from the puck and release to fling.");
+            GUILayout.Label("Click a puck, drag and release to fling it.");
             GUILayout.EndArea();
         }
     }

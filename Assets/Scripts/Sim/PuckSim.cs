@@ -17,6 +17,11 @@ namespace Puckmite.Sim
         /// <summary>Safety cap so <see cref="RunToRest"/> cannot spin forever on a degenerate (e.g. frictionless) setup.</summary>
         public const int DefaultMaxSteps = 100000;
 
+        // Substepping (design doc 7.4): keep the fastest puck's per-substep move under this fraction of the
+        // smallest radius so it cannot pass through another puck. MaxSubsteps bounds work for extreme speeds.
+        private const float SubstepMoveFraction = 0.5f;
+        private const int MaxSubsteps = 64;
+
         private readonly List<Puck> _pucks;
         private readonly Vector2 _boardMin;
         private readonly Vector2 _boardMax;
@@ -27,6 +32,10 @@ namespace Puckmite.Sim
         // Events produced by the current Step(). Allocated once and cleared each step so headless
         // roll-outs never allocate. The buffer is handed back from Step() and overwritten by the next.
         private readonly List<PuckSimEvent> _events = new List<PuckSimEvent>();
+
+        // Reused index buffer, sorted by ascending puck Id, so collision/wall resolution order does not
+        // depend on the (unstable) list order. Rebuilt each Step().
+        private readonly List<int> _order = new List<int>();
 
         public PuckSim(Vector2 boardMin, Vector2 boardMax, float friction, float restitution, float restThreshold)
         {
@@ -90,30 +99,45 @@ namespace Puckmite.Sim
         {
             _events.Clear();
 
-            // Friction, then integrate position.
+            // Friction once per step so the deceleration model is unchanged; the integration below is
+            // split into substeps, but the total displacement over the step is the same as one full move.
             for (int i = 0; i < _pucks.Count; i++)
             {
                 Puck p = _pucks[i];
                 ApplyFriction(ref p);
-                p.Position += p.Velocity * Dt;
                 _pucks[i] = p;
             }
 
-            // Puck-to-puck collisions, one deterministic pass in fixed (i < j) order.
-            for (int i = 0; i < _pucks.Count; i++)
+            BuildIdOrder();
+            int substeps = ComputeSubstepCount();
+            float subDt = Dt / substeps;
+
+            for (int s = 0; s < substeps; s++)
             {
-                for (int j = i + 1; j < _pucks.Count; j++)
+                for (int i = 0; i < _pucks.Count; i++)
                 {
-                    ResolvePuckPuck(i, j);
+                    Puck p = _pucks[i];
+                    p.Position += p.Velocity * subDt;
+                    _pucks[i] = p;
                 }
-            }
 
-            // Wall reflections last, so every puck ends the step inside the board.
-            for (int i = 0; i < _pucks.Count; i++)
-            {
-                Puck p = _pucks[i];
-                ResolveWalls(ref p);
-                _pucks[i] = p;
+                // Resolve collisions then walls in ascending Id order. List-index order is unstable once
+                // pucks are destroyed and recreated, which would make the result depend on layout.
+                for (int oi = 0; oi < _order.Count; oi++)
+                {
+                    for (int oj = oi + 1; oj < _order.Count; oj++)
+                    {
+                        ResolvePuckPuck(_order[oi], _order[oj]);
+                    }
+                }
+
+                for (int oi = 0; oi < _order.Count; oi++)
+                {
+                    int index = _order[oi];
+                    Puck p = _pucks[index];
+                    ResolveWalls(ref p);
+                    _pucks[index] = p;
+                }
             }
 
             return _events;
@@ -185,6 +209,71 @@ namespace Puckmite.Sim
             }
 
             return -1;
+        }
+
+        // Number of substeps for this step: enough that the fastest puck moves at most a fraction of the
+        // smallest radius per substep. Clamped to [1, MaxSubsteps].
+        private int ComputeSubstepCount()
+        {
+            float maxSpeed = 0f;
+            float minRadius = float.MaxValue;
+            for (int i = 0; i < _pucks.Count; i++)
+            {
+                float speed = _pucks[i].Velocity.magnitude;
+                if (speed > maxSpeed)
+                {
+                    maxSpeed = speed;
+                }
+
+                if (_pucks[i].Radius < minRadius)
+                {
+                    minRadius = _pucks[i].Radius;
+                }
+            }
+
+            if (maxSpeed <= 0f || minRadius <= 0f || minRadius == float.MaxValue)
+            {
+                return 1;
+            }
+
+            float moveThisStep = maxSpeed * Dt;
+            float safeMovePerSubstep = minRadius * SubstepMoveFraction;
+            int count = (int)Math.Ceiling(moveThisStep / safeMovePerSubstep);
+            if (count < 1)
+            {
+                count = 1;
+            }
+            else if (count > MaxSubsteps)
+            {
+                count = MaxSubsteps;
+            }
+
+            return count;
+        }
+
+        // Fills _order with puck list-indices sorted by ascending Id (insertion sort: allocation-free and
+        // fast on the small, usually already-sorted puck list).
+        private void BuildIdOrder()
+        {
+            _order.Clear();
+            for (int i = 0; i < _pucks.Count; i++)
+            {
+                _order.Add(i);
+            }
+
+            for (int i = 1; i < _order.Count; i++)
+            {
+                int index = _order[i];
+                int id = _pucks[index].Id;
+                int j = i - 1;
+                while (j >= 0 && _pucks[_order[j]].Id > id)
+                {
+                    _order[j + 1] = _order[j];
+                    j--;
+                }
+
+                _order[j + 1] = index;
+            }
         }
 
         // Constant deceleration: cut a fixed amount off the speed each step, then snap to rest once

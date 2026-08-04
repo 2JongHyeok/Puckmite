@@ -34,6 +34,8 @@ namespace Puckmite.Sim
                 MomentumConservationCheck(),
                 EventDeterminismCheck(),
                 EventEmissionCheck(),
+                TunnelingCheck(),
+                CollisionOrderIndependenceCheck(),
             };
         }
 
@@ -254,6 +256,127 @@ namespace Puckmite.Sim
                 if (!same)
                 {
                     difference = $"Event index {i} differs: {Format(x)} vs {Format(y)}.";
+                    return false;
+                }
+            }
+
+            difference = string.Empty;
+            return true;
+        }
+
+        /// <summary>A very fast head-on shot must still collide, not pass through the target (design doc 7.4 / 7.10).</summary>
+        public static CheckResult TunnelingCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-60f, -10f), new Vector2(60f, 10f), 0f, 0.9f, 0f);
+            sim.AddPuck(new Puck(0, new Vector2(-40f, 0f), 0.5f, 1f, PuckOwner.Player));
+            sim.AddPuck(new Puck(1, new Vector2(40f, 0f), 0.5f, 1f, PuckOwner.Enemy));
+
+            // 1200 u/s moves 10 units per 1/120 step — many radii — so it would tunnel without substepping.
+            sim.SetVelocity(0, new Vector2(1200f, 0f));
+
+            bool collided = false;
+            for (int step = 0; step < 100 && !collided; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.PuckCollision)
+                    {
+                        collided = true;
+                    }
+                }
+            }
+
+            sim.TryGetPuck(1, out Puck target);
+            bool targetMoved = target.Velocity != Vector2.zero;
+            bool passed = collided && targetMoved;
+            string detail = $"collided={collided}, target moved={targetMoved} (target vel {Format(target.Velocity)}).";
+            return new CheckResult("No tunneling (fast head-on)", passed, detail);
+        }
+
+        /// <summary>
+        /// The result must not depend on the order pucks sit in the list — collisions resolve in Id order.
+        /// Builds the same scene twice with the pucks added in different list orders and requires identical
+        /// per-Id final states and event streams.
+        /// </summary>
+        public static CheckResult CollisionOrderIndependenceCheck()
+        {
+            Puck p0 = new Puck(0, new Vector2(-3f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(7f, 0f) };
+            Puck p1 = new Puck(1, new Vector2(0f, 0.25f), 0.6f, 1.3f, PuckOwner.Enemy);
+            Puck p2 = new Puck(2, new Vector2(3f, -0.15f), 0.5f, 1f, PuckOwner.Enemy) { Velocity = new Vector2(-4f, 0f) };
+
+            PuckSim ascending = new PuckSim(new Vector2(-20f, -20f), new Vector2(20f, 20f), 3f, 0.9f, 0.01f);
+            ascending.AddPuck(p0);
+            ascending.AddPuck(p1);
+            ascending.AddPuck(p2);
+
+            PuckSim shuffled = new PuckSim(new Vector2(-20f, -20f), new Vector2(20f, 20f), 3f, 0.9f, 0.01f);
+            shuffled.AddPuck(p2);
+            shuffled.AddPuck(p0);
+            shuffled.AddPuck(p1);
+
+            List<PuckSimEvent> eventsA = RunToRestCollecting(ascending);
+            List<PuckSimEvent> eventsB = RunToRestCollecting(shuffled);
+
+            if (!StatesEqualById(ascending, shuffled, out string stateDiff))
+            {
+                return new CheckResult("Collision order independence", false, stateDiff);
+            }
+
+            if (!EventsEqual(eventsA, eventsB, out string eventDiff))
+            {
+                return new CheckResult("Collision order independence", false, eventDiff);
+            }
+
+            return new CheckResult("Collision order independence", true,
+                $"Two list orders gave identical per-Id states and event streams ({eventsA.Count} events).");
+        }
+
+        private static List<PuckSimEvent> RunToRestCollecting(PuckSim sim, int maxSteps = 100000)
+        {
+            List<PuckSimEvent> collected = new List<PuckSimEvent>();
+            int steps = 0;
+            while (steps < maxSteps && !sim.AllAtRest())
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    collected.Add(events[i]);
+                }
+
+                steps++;
+            }
+
+            return collected;
+        }
+
+        private static bool StatesEqualById(PuckSim a, PuckSim b, out string difference)
+        {
+            IReadOnlyList<Puck> pa = a.Pucks;
+            if (pa.Count != b.Pucks.Count)
+            {
+                difference = $"Puck count differs: {pa.Count} vs {b.Pucks.Count}.";
+                return false;
+            }
+
+            for (int i = 0; i < pa.Count; i++)
+            {
+                Puck x = pa[i];
+                if (!b.TryGetPuck(x.Id, out Puck y))
+                {
+                    difference = $"Puck Id {x.Id} missing from the second sim.";
+                    return false;
+                }
+
+                bool same =
+                    ExactlyEqual(x.Position, y.Position) &&
+                    ExactlyEqual(x.Velocity, y.Velocity) &&
+                    x.BounceCount == y.BounceCount;
+                if (!same)
+                {
+                    difference =
+                        $"Puck Id {x.Id} differs: pos {Format(x.Position)} vs {Format(y.Position)}, " +
+                        $"vel {Format(x.Velocity)} vs {Format(y.Velocity)}, bounces {x.BounceCount} vs {y.BounceCount}.";
                     return false;
                 }
             }
