@@ -73,6 +73,19 @@ namespace Puckmite.Sim
             return _pucks.Count - 1;
         }
 
+        /// <summary>Removes the puck with the given Id. Returns false if no puck has that Id.</summary>
+        public bool RemovePuck(int id)
+        {
+            int index = IndexOf(id);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            _pucks.RemoveAt(index);
+            return true;
+        }
+
         /// <summary>Finds a puck by Id. Returns false if no puck has that Id.</summary>
         public bool TryGetPuck(int id, out Puck puck)
         {

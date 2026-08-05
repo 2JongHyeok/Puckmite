@@ -38,6 +38,7 @@ namespace Puckmite.Sim
                 CollisionOrderIndependenceCheck(),
                 WallDampingCheck(),
                 ImpactDampingCheck(),
+                RemovePuckCheck(),
             };
         }
 
@@ -395,6 +396,26 @@ namespace Puckmite.Sim
             bool passed = collided && Math.Abs(target.Velocity.magnitude - 5f) < 1e-3f;
             string detail = $"collided={collided}, target speed={target.Velocity.magnitude:F4} (expect 10 * 0.5 = 5).";
             return new CheckResult("Impact damping", passed, detail);
+        }
+
+        /// <summary>RemovePuck drops exactly the requested puck and leaves the rest addressable by Id.</summary>
+        public static CheckResult RemovePuckCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-10f, -10f), new Vector2(10f, 10f), 3f, 0.9f, 0.01f);
+            sim.AddPuck(new Puck(0, new Vector2(-3f, 0f), 0.5f, 1f, PuckOwner.Player));
+            sim.AddPuck(new Puck(1, new Vector2(0f, 0f), 0.5f, 1f, PuckOwner.Enemy));
+            sim.AddPuck(new Puck(2, new Vector2(3f, 0f), 0.5f, 1f, PuckOwner.Enemy));
+
+            bool removed = sim.RemovePuck(1);
+            bool gone = !sim.TryGetPuck(1, out _);
+            bool othersKept = sim.TryGetPuck(0, out _) && sim.TryGetPuck(2, out _);
+            bool countOk = sim.Pucks.Count == 2;
+            bool missingReturnsFalse = !sim.RemovePuck(99);
+
+            bool passed = removed && gone && othersKept && countOk && missingReturnsFalse;
+            string detail =
+                $"removed={removed}, id1 gone={gone}, id0&2 kept={othersKept}, count={sim.Pucks.Count} (expect 2), missing->false={missingReturnsFalse}.";
+            return new CheckResult("RemovePuck", passed, detail);
         }
 
         private static List<PuckSimEvent> RunToRestCollecting(PuckSim sim, int maxSteps = 100000)
