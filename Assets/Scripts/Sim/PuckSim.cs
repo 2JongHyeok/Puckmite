@@ -22,6 +22,10 @@ namespace Puckmite.Sim
         private const float SubstepMoveFraction = 0.5f;
         private const int MaxSubsteps = 64;
 
+        // Growth (design doc 3.7): 3 XP per level, level cap 5, over-cap XP discarded.
+        public const int XpPerLevel = 3;
+        public const int MaxLevel = 5;
+
         private readonly List<Puck> _pucks;
         private readonly Vector2 _boardMin;
         private readonly Vector2 _boardMax;
@@ -349,6 +353,22 @@ namespace Puckmite.Sim
             }
         }
 
+        // Growth (design doc 3.7): +1 XP; every XpPerLevel a level, capped at MaxLevel; over-cap XP discarded.
+        private static void GrantXp(ref Puck p)
+        {
+            if (p.Level >= MaxLevel)
+            {
+                return;
+            }
+
+            p.Xp++;
+            if (p.Xp >= XpPerLevel)
+            {
+                p.Xp = 0;
+                p.Level++;
+            }
+        }
+
         // Constant deceleration: cut a fixed amount off the speed each step, then snap to rest once
         // the speed drops to the threshold. Direction is preserved.
         private void ApplyFriction(ref Puck p)
@@ -388,6 +408,7 @@ namespace Puckmite.Sim
                     p.Velocity = new Vector2(-p.Velocity.x * _wallRestitution, p.Velocity.y);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
+                    GrantXp(ref p); // wall-bounce XP, owner-independent (design doc 3.7)
                 }
             }
             else if (p.Position.x > maxX)
@@ -398,6 +419,7 @@ namespace Puckmite.Sim
                     p.Velocity = new Vector2(-p.Velocity.x * _wallRestitution, p.Velocity.y);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
+                    GrantXp(ref p); // wall-bounce XP, owner-independent (design doc 3.7)
                 }
             }
 
@@ -409,6 +431,7 @@ namespace Puckmite.Sim
                     p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y * _wallRestitution);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
+                    GrantXp(ref p); // wall-bounce XP, owner-independent (design doc 3.7)
                 }
             }
             else if (p.Position.y > maxY)
@@ -419,6 +442,7 @@ namespace Puckmite.Sim
                     p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y * _wallRestitution);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
+                    GrantXp(ref p); // wall-bounce XP, owner-independent (design doc 3.7)
                 }
             }
         }
@@ -480,6 +504,12 @@ namespace Puckmite.Sim
                 {
                     a.Health--;
                     b.Health--;
+                }
+                else
+                {
+                    // Same-team collision: no damage, both gain XP instead (design doc 3.3 / 3.7).
+                    GrantXp(ref a);
+                    GrantXp(ref b);
                 }
 
                 _events.Add(PuckSimEvent.PuckCollision(a.Id, b.Id, impulseMagnitude));

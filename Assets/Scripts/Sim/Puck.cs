@@ -22,6 +22,8 @@ namespace Puckmite.Sim
         public PuckOwner Owner;
         public int BounceCount;
         public int Health;
+        public int Level;
+        public int Xp;
 
         public Puck(int id, Vector2 position, float radius, float mass, PuckOwner owner)
         {
@@ -33,6 +35,8 @@ namespace Puckmite.Sim
             Owner = owner;
             BounceCount = 0;
             Health = 5; // placeholder default (design doc: 3~5, 미정); callers can override via initializer
+            Level = 1;  // design doc 3.7: level starts at 1, caps at 5
+            Xp = 0;
         }
 
         public bool IsAtRest => Velocity == Vector2.zero;

@@ -44,6 +44,8 @@ namespace Puckmite.Sim
                 SetHealthCheck(),
                 CellOccupancyCheck(),
                 CellTypeCheck(),
+                XpGainCheck(),
+                LevelCapCheck(),
             };
         }
 
@@ -536,6 +538,77 @@ namespace Puckmite.Sim
             return new CheckResult("Cell type", passed, detail);
         }
 
+        /// <summary>XP: +1 per wall bounce (owner-independent) and per same-team collision; cross-team collisions give none (design doc 3.7).</summary>
+        public static CheckResult XpGainCheck()
+        {
+            // Wall bounces: a frictionless puck ricochets; Level/Xp must match the number of bounces counted.
+            PuckSim wall = new PuckSim(new Vector2(-10f, -6f), new Vector2(10f, 6f), 0f, 1f, 0f);
+            wall.AddPuck(new Puck(0, new Vector2(0f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(30f, 0f) });
+            int bounces = 0;
+            for (int step = 0; step < 200; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = wall.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.WallBounce)
+                    {
+                        bounces++;
+                    }
+                }
+            }
+
+            wall.TryGetPuck(0, out Puck w);
+            int applied = bounces < 12 ? bounces : 12;
+            bool wallOk = bounces >= 1 && w.Level == 1 + applied / 3 && w.Xp == (applied >= 12 ? 0 : applied % 3);
+
+            // Same-team collision -> both gain XP.
+            PuckSim ally = new PuckSim(new Vector2(-50f, -10f), new Vector2(50f, 10f), 0f, 1f, 0f);
+            ally.AddPuck(new Puck(0, new Vector2(-5f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(10f, 0f) });
+            ally.AddPuck(new Puck(1, new Vector2(5f, 0f), 0.5f, 1f, PuckOwner.Player));
+            StepUntilPuckCollision(ally);
+            ally.TryGetPuck(0, out Puck a0);
+            ally.TryGetPuck(1, out Puck a1);
+            bool allyOk = a0.Xp == 1 && a1.Xp == 1 && a0.Level == 1 && a1.Level == 1;
+
+            // Cross-team collision -> no XP (damage instead).
+            PuckSim enemy = new PuckSim(new Vector2(-50f, -10f), new Vector2(50f, 10f), 0f, 1f, 0f);
+            enemy.AddPuck(new Puck(0, new Vector2(-5f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(10f, 0f) });
+            enemy.AddPuck(new Puck(1, new Vector2(5f, 0f), 0.5f, 1f, PuckOwner.Enemy));
+            StepUntilPuckCollision(enemy);
+            enemy.TryGetPuck(0, out Puck e0);
+            enemy.TryGetPuck(1, out Puck e1);
+            bool enemyOk = e0.Xp == 0 && e1.Xp == 0;
+
+            bool passed = wallOk && allyOk && enemyOk;
+            string detail = $"wall: L{w.Level} Xp{w.Xp} from {bounces} bounces ({wallOk}); ally both Xp1={allyOk}; cross-team no XP={enemyOk}.";
+            return new CheckResult("XP gain", passed, detail);
+        }
+
+        /// <summary>Over 12 XP tops out at level 5 with Xp 0; further XP is discarded (design doc 3.7).</summary>
+        public static CheckResult LevelCapCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-10f, -6f), new Vector2(10f, 6f), 0f, 1f, 0f);
+            sim.AddPuck(new Puck(0, new Vector2(0f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(60f, 0f) });
+
+            int bounces = 0;
+            for (int step = 0; step < 4000; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.WallBounce)
+                    {
+                        bounces++;
+                    }
+                }
+            }
+
+            sim.TryGetPuck(0, out Puck p);
+            bool passed = bounces >= 12 && p.Level == 5 && p.Xp == 0;
+            string detail = $"bounces={bounces} (need >=12), level={p.Level} (expect 5), xp={p.Xp} (expect 0).";
+            return new CheckResult("Level cap", passed, detail);
+        }
+
         private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)
         {
             for (int step = 0; step < maxSteps; step++)
@@ -591,7 +664,9 @@ namespace Puckmite.Sim
                     ExactlyEqual(x.Position, y.Position) &&
                     ExactlyEqual(x.Velocity, y.Velocity) &&
                     x.BounceCount == y.BounceCount &&
-                    x.Health == y.Health;
+                    x.Health == y.Health &&
+                    x.Level == y.Level &&
+                    x.Xp == y.Xp;
                 if (!same)
                 {
                     difference =
@@ -650,7 +725,9 @@ namespace Puckmite.Sim
                     x.Mass == y.Mass &&
                     x.Owner == y.Owner &&
                     x.BounceCount == y.BounceCount &&
-                    x.Health == y.Health;
+                    x.Health == y.Health &&
+                    x.Level == y.Level &&
+                    x.Xp == y.Xp;
 
                 if (!same)
                 {
