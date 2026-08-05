@@ -107,8 +107,21 @@ namespace Puckmite.View
         // Top character row (design doc 2.2): one stat text per actor. Each actor's buff is a snapshot taken
         // when its own turn ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
         private TextMeshPro[] _characterStatTexts; // indexed by actor
+        private SpriteRenderer[] _characterBodies;      // indexed by actor, greyed out when the character is down
+        private SpriteRenderer[] _characterTargetRings; // ring behind a character that can be attacked right now
         private int[] _actorBuffAttack;            // actor -> attack buff snapshot (0 = base only)
-        private int[] _actorBuffShield;            // actor -> shield buff snapshot
+
+        // Character combat (design doc 3.6/3.8) — view-only; the sim stays pure physics and stone combat.
+        private int[] _actorHealth;       // current character health
+        private int[] _actorBaseShield;   // base shield: run-scoped pool, never refills once spent
+        private int[] _actorEffectShield; // effect shield: refilled by the turn-end buff, spent when hit
+        private bool[] _actorDead;
+        private bool _awaitingAttack;     // the player's turn is at step 4: pick a target (design doc 3.5)
+        private int _hoveredCharacter = -1; // actor under the cursor while picking a target, -1 for none
+        private string _attackLog = "";   // last attack resolved, shown in the HUD
+        private bool _gameOver;
+        private string _gameOverText = "";
+        private readonly List<int> _removeIds = new List<int>(); // reused: stones of an actor that just died
 
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
@@ -141,10 +154,11 @@ namespace Puckmite.View
             ApplyHealthChangeIfNeeded();
             HandleInput();
             DriveSimulation();
-            if (_hasRolledThisTurn && _sim.AllAtRest())
+            // Rolled and the board has settled: lock in the buff (step 3), then attack (step 4).
+            if (!_gameOver && !_awaitingAttack && _hasRolledThisTurn && _sim.AllAtRest())
             {
-                CaptureActorBuff(_currentActor); // turn end: lock in this actor's buff (design doc 3.5 step 3)
-                AdvanceTurn();
+                CaptureActorBuff(_currentActor);
+                BeginAttackPhase();
             }
 
             UpdatePuckTransforms();
@@ -288,7 +302,7 @@ namespace Puckmite.View
         {
             BuildSimFrom(InitialLayout());
             AssignActors();
-            ResetActorBuffs();
+            ResetCombatState();
             _accumulator = 0f;
             _wallBounceTotal = 0;
             _collisionTotal = 0;
@@ -324,27 +338,31 @@ namespace Puckmite.View
             _hasRolledThisTurn = false;
         }
 
-        // Begins _currentActor's turn: settle its stones (design doc 3.5 step 1); if that (or emptiness)
-        // leaves it with no stones, move on. Empty actors are skipped — there is no new-stone entry yet.
-        // Ends on the first actor that still has stones after its own settlement.
+        // Begins _currentActor's turn: settle its stones (design doc 3.5 step 1). Actors that are down are
+        // skipped, and so are actors left with no stones on the board — they would roll a new stone from
+        // their entry edge (design doc 3.3/3.4), which is not built yet, so they cannot act at all.
         private void StartTurn()
         {
             _hasRolledThisTurn = false;
+            _awaitingAttack = false;
             for (int step = 0; step < _actorCount; step++)
             {
-                ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
-                if (ActorHasLiveStones(_currentActor))
+                if (!_actorDead[_currentActor])
                 {
-                    SettleCurrentActor();
+                    ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                     if (ActorHasLiveStones(_currentActor))
                     {
-                        return;
+                        SettleCurrentActor();
+                        if (ActorHasLiveStones(_currentActor))
+                        {
+                            return;
+                        }
                     }
                 }
 
                 _currentActor = (_currentActor + 1) % _actorCount;
             }
-            // No actor has stones left; leave the current actor as is.
+            // Nobody can act; leave the current actor as is.
         }
 
         // Moves to the next actor and begins its turn.
@@ -393,6 +411,8 @@ namespace Puckmite.View
 
         private void HandleInput()
         {
+            _hoveredCharacter = -1; // recomputed below while an attack is pending
+
             Mouse mouse = Mouse.current;
             if (mouse == null)
             {
@@ -401,6 +421,37 @@ namespace Puckmite.View
 
             Vector2 screen = mouse.position.ReadValue();
             Vector2 world = ScreenToWorld(screen);
+
+            if (_gameOver)
+            {
+                return;
+            }
+
+            // Turn step 4 (design doc 3.5): the player's attack is forced and hits one target — hover an
+            // enemy character in the top row to highlight it, click to hit it. Rolling is locked out until
+            // the attack is spent. Hover and click share one hit test, so only a ringed character is hittable.
+            if (_awaitingAttack)
+            {
+                if (!PointerOverHud(screen))
+                {
+                    int target = CharacterAt(world);
+                    if (target > 0 && !_actorDead[target])
+                    {
+                        _hoveredCharacter = target;
+                        if (mouse.leftButton.wasPressedThisFrame)
+                        {
+                            ResolveAttack(_currentActor, target);
+                            _awaitingAttack = false;
+                            if (!_gameOver)
+                            {
+                                AdvanceTurn();
+                            }
+                        }
+                    }
+                }
+
+                return;
+            }
 
             if (mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen) && !_hasRolledThisTurn)
             {
@@ -752,8 +803,14 @@ namespace Puckmite.View
         private void BuildCharacters()
         {
             _characterStatTexts = new TextMeshPro[_actorCount];
+            _characterBodies = new SpriteRenderer[_actorCount];
+            _characterTargetRings = new SpriteRenderer[_actorCount];
             _actorBuffAttack = new int[_actorCount];
-            _actorBuffShield = new int[_actorCount];
+            _actorHealth = new int[_actorCount];
+            _actorBaseShield = new int[_actorCount];
+            _actorEffectShield = new int[_actorCount];
+            _actorDead = new bool[_actorCount];
+            ResetCombatState();
 
             for (int actor = 0; actor < _actorCount; actor++)
             {
@@ -761,6 +818,19 @@ namespace Puckmite.View
 
                 GameObject root = new GameObject($"Character{actor}");
                 root.transform.SetParent(transform, false);
+
+                // Target ring: same treatment the current actor's stones get, so "clickable" reads the same way.
+                GameObject ringGo = new GameObject("TargetRing");
+                ringGo.transform.SetParent(root.transform, false);
+                float ringDiameter = CharBodyRadius * 2.5f;
+                ringGo.transform.localPosition = new Vector3(x, CharBodyY, 0f);
+                ringGo.transform.localScale = new Vector3(ringDiameter, ringDiameter, 1f);
+                SpriteRenderer ring = ringGo.AddComponent<SpriteRenderer>();
+                ring.sprite = ProceduralSprites.Circle();
+                ring.color = new Color(1f, 0.9f, 0.25f, 0.9f); // matches the stone turn ring
+                ring.sortingOrder = 9;                          // behind the body (10), above the board
+                ring.enabled = false;
+                _characterTargetRings[actor] = ring;
 
                 GameObject bodyGo = new GameObject("Body");
                 bodyGo.transform.SetParent(root.transform, false);
@@ -771,6 +841,7 @@ namespace Puckmite.View
                 body.sprite = ProceduralSprites.Circle();
                 body.color = ActorColor(actor);
                 body.sortingOrder = 10;
+                _characterBodies[actor] = body;
 
                 _characterStatTexts[actor] = MakeCharacterText(root.transform, "Stats", x, CharBodyY + CharStatOffset, CharBodyRadius * 3.6f, CharStatHeight);
             }
@@ -838,8 +909,9 @@ namespace Puckmite.View
             }
         }
 
-        // Writes each actor's character row: bold name, base HP, and attack/shield as base plus the buff
-        // snapshot locked in at that actor's last turn end (design doc 3.6 — held until its next turn).
+        // Writes each actor's character row: bold name, current/max health, and attack/shield including the
+        // buff snapshot locked in at that actor's last turn end (design doc 3.6 — held until its next turn).
+        // The body is tinted grey when the character is down, and brightened while it is a legal target.
         private void UpdateCharacterStats()
         {
             if (_characterStatTexts == null)
@@ -849,9 +921,21 @@ namespace Puckmite.View
 
             for (int actor = 0; actor < _actorCount; actor++)
             {
+                if (_actorDead[actor])
+                {
+                    _characterStatTexts[actor].text = $"<b>{ActorName(actor)}</b>\nDOWN";
+                    _characterBodies[actor].color = new Color(0.30f, 0.30f, 0.34f, 0.55f);
+                    _characterTargetRings[actor].enabled = false;
+                    continue;
+                }
+
                 string attack = FormatStat(BaseAttack(actor), _actorBuffAttack[actor]);
-                string shield = FormatStat(BaseShield(actor), _actorBuffShield[actor]);
-                _characterStatTexts[actor].text = $"<b>{ActorName(actor)}</b>\nHP {BaseHealth(actor)}\nATK {attack}\nSHD {shield}";
+                string shield = FormatStat(_actorBaseShield[actor], _actorEffectShield[actor]);
+                _characterStatTexts[actor].text =
+                    $"<b>{ActorName(actor)}</b>\nHP {_actorHealth[actor]}/{BaseHealth(actor)}\nATK {attack}\nSHD {shield}";
+
+                _characterBodies[actor].color = ActorColor(actor);
+                _characterTargetRings[actor].enabled = actor == _hoveredCharacter;
             }
         }
 
@@ -889,10 +973,11 @@ namespace Puckmite.View
             }
 
             _actorBuffAttack[actor] = attack;
-            _actorBuffShield[actor] = shield;
+            _actorEffectShield[actor] = shield; // effect shield refills to the buff amount (design doc 3.6)
         }
 
         // Turn start (design doc 3.6): the actor's buff resets, leaving base stats only until it rolls again.
+        // The effect shield expires with it; the base shield pool is untouched (it is run-scoped).
         private void ClearActorBuff(int actor)
         {
             if (_actorBuffAttack == null)
@@ -901,22 +986,142 @@ namespace Puckmite.View
             }
 
             _actorBuffAttack[actor] = 0;
-            _actorBuffShield[actor] = 0;
+            _actorEffectShield[actor] = 0;
         }
 
-        // Clears every actor's buff snapshot (a full reset returns the whole row to base stats).
-        private void ResetActorBuffs()
+        // --- Character combat (design doc 3.5 step 4, 3.6, 3.8) --------------------------------------
+
+        // Restores every character to full: health, base shield pool, no buffs, nobody down, game on.
+        private void ResetCombatState()
         {
-            if (_actorBuffAttack == null)
+            for (int actor = 0; actor < _actorCount; actor++)
             {
+                _actorHealth[actor] = BaseHealth(actor);
+                _actorBaseShield[actor] = BaseShield(actor);
+                _actorEffectShield[actor] = 0;
+                _actorBuffAttack[actor] = 0;
+                _actorDead[actor] = false;
+            }
+
+            _awaitingAttack = false;
+            _gameOver = false;
+            _gameOverText = "";
+            _attackLog = "";
+        }
+
+        // Turn step 4: the attack is forced, one target. The player picks by clicking an enemy character;
+        // an enemy has only the player to hit, so it fires at once (no AI yet — that is the next step).
+        private void BeginAttackPhase()
+        {
+            if (_currentActor == 0)
+            {
+                _awaitingAttack = true;
                 return;
             }
 
+            ResolveAttack(_currentActor, 0);
+            if (!_gameOver)
+            {
+                AdvanceTurn();
+            }
+        }
+
+        // Applies one attack: damage = attacker's base attack + its buff snapshot. The target spends its
+        // effect shield first (it expires at its next turn anyway), then the base pool, and only what is
+        // left cuts health (design doc 3.6). Health at 0 takes the character out (design doc 3.8).
+        private void ResolveAttack(int attacker, int target)
+        {
+            int damage = BaseAttack(attacker) + _actorBuffAttack[attacker];
+
+            int fromEffect = Mathf.Min(_actorEffectShield[target], damage);
+            _actorEffectShield[target] -= fromEffect;
+
+            int remaining = damage - fromEffect;
+            int fromBase = Mathf.Min(_actorBaseShield[target], remaining);
+            _actorBaseShield[target] -= fromBase;
+
+            remaining -= fromBase;
+            _actorHealth[target] -= remaining;
+
+            int absorbed = fromEffect + fromBase;
+            string absorbedText = absorbed > 0 ? $" (shield absorbed {absorbed})" : "";
+
+            if (_actorHealth[target] <= 0)
+            {
+                _actorHealth[target] = 0;
+                KillActor(target);
+                _attackLog = $"{ActorName(attacker)} hit {ActorName(target)} for {damage}{absorbedText} — down.";
+            }
+            else
+            {
+                _attackLog = $"{ActorName(attacker)} hit {ActorName(target)} for {damage}{absorbedText} — HP {_actorHealth[target]}.";
+            }
+
+            CheckGameOver();
+        }
+
+        // Takes a character out of the match: its stones leave the board (design doc 4.1) and its turn is
+        // skipped from here on.
+        private void KillActor(int actor)
+        {
+            _actorDead[actor] = true;
+            _actorHealth[actor] = 0;
+            _actorBaseShield[actor] = 0;
+            _actorEffectShield[actor] = 0;
+            _actorBuffAttack[actor] = 0;
+
+            _removeIds.Clear();
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if (_actorOf[pucks[i].Id] == actor)
+                {
+                    _removeIds.Add(pucks[i].Id);
+                }
+            }
+
+            for (int i = 0; i < _removeIds.Count; i++)
+            {
+                _sim.RemovePuck(_removeIds[i]);
+            }
+        }
+
+        // Design doc 3.8: every enemy down wins the match, the player going down ends it.
+        private void CheckGameOver()
+        {
+            if (_actorDead[0])
+            {
+                _gameOver = true;
+                _gameOverText = "Defeat — the player is down.";
+                return;
+            }
+
+            for (int actor = 1; actor < _actorCount; actor++)
+            {
+                if (!_actorDead[actor])
+                {
+                    return;
+                }
+            }
+
+            _gameOver = true;
+            _gameOverText = "Victory — every enemy is down.";
+        }
+
+        // The character whose body circle covers the point, or -1. Used to pick an attack target.
+        private int CharacterAt(Vector2 world)
+        {
+            float grab = CharBodyRadius * 1.4f; // forgiving, the bodies are far apart
             for (int actor = 0; actor < _actorCount; actor++)
             {
-                _actorBuffAttack[actor] = 0;
-                _actorBuffShield[actor] = 0;
+                Vector2 center = new Vector2(CharacterX(actor), CharBodyY);
+                if ((world - center).sqrMagnitude <= grab * grab)
+                {
+                    return actor;
+                }
             }
+
+            return -1;
         }
 
         private int BaseHealth(int actor)
@@ -1267,7 +1472,8 @@ namespace Puckmite.View
             GUILayout.BeginArea(new Rect(HudRect.x, HudRect.y, HudRect.width, HudRect.height), GUI.skin.box);
 
             GUILayout.Label("Puckmite Playtest");
-            GUILayout.Label($"Turn: {ActorName(_currentActor)}    {(_hasRolledThisTurn ? "(rolling…)" : "roll a highlighted stone")}");
+            GUILayout.Label(_gameOver ? $"** {_gameOverText} Press Reset. **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
+            GUILayout.Label(_attackLog.Length > 0 ? _attackLog : "No attack yet.");
             GUILayout.Label($"Pucks: {_sim.Pucks.Count}    At rest: {_sim.AllAtRest()}");
             GUILayout.Label($"Wall bounces: {_wallBounceTotal}    Collisions: {_collisionTotal}");
             GUILayout.Label($"Destroyed: {_destroyedTotal}");
@@ -1322,6 +1528,17 @@ namespace Puckmite.View
 
             GUILayout.Label("Click a puck, drag and release to fling it.");
             GUILayout.EndArea();
+        }
+
+        // What the current actor is waiting on, for the HUD turn line.
+        private string TurnPrompt()
+        {
+            if (_awaitingAttack)
+            {
+                return "(click an enemy to attack)";
+            }
+
+            return _hasRolledThisTurn ? "(rolling…)" : "roll a highlighted stone";
         }
     }
 }
