@@ -29,6 +29,7 @@ namespace Puckmite.View
         [SerializeField] private float _puckRadius = 1.5f;      // design doc: diameter 3 on a 5-wide cell
         [SerializeField] private int _health = 5;               // stone health (design doc 3~5, 미정); 1..8 via HUD
         [SerializeField] private float _occupancyThreshold = 0.1f; // cross a cell boundary by this to occupy it (문서 3.2, 임시)
+        [SerializeField] private int _cellDamage = 1;              // damage-cell settlement amount (문서 미정, 임시)
 
         [Header("Playback")]
         [SerializeField] private float _speedMultiplier = 1f;  // sim steps consumed per real second, x1/x2/x4
@@ -49,7 +50,7 @@ namespace Puckmite.View
         // Cell-occupancy highlights: pool cap (6 pucks * up to 4 cells, with margin).
         private const int MaxCellHighlights = 30;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 660f);
+        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 680f);
 
         private PuckSim _sim;
         private Camera _camera;
@@ -85,6 +86,7 @@ namespace Puckmite.View
         private int _currentActor;
         private bool _hasRolledThisTurn;
         private SpriteRenderer[] _turnRings; // highlight behind the current actor's stones
+        private readonly List<int> _settleIds = new List<int>(); // reused: current actor's stone ids to settle
 
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
@@ -146,6 +148,7 @@ namespace Puckmite.View
             BuildAimLine();
             BuildPreviewLine();
             BuildPreviewMarker();
+            StartTurn();
             UpdatePuckTransforms();
         }
 
@@ -263,6 +266,7 @@ namespace Puckmite.View
             _wallBounceTotal = 0;
             _collisionTotal = 0;
             _destroyedTotal = 0;
+            StartTurn();
             UpdatePuckTransforms();
         }
 
@@ -293,20 +297,49 @@ namespace Puckmite.View
             _hasRolledThisTurn = false;
         }
 
-        // Passes the turn to the next actor that still has stones on the board (empty actors are skipped —
-        // there is no new-stone entry yet). Design doc 3.5: order tightens up when an actor is out.
-        private void AdvanceTurn()
+        // Begins _currentActor's turn: settle its stones (design doc 3.5 step 1); if that (or emptiness)
+        // leaves it with no stones, move on. Empty actors are skipped — there is no new-stone entry yet.
+        // Ends on the first actor that still has stones after its own settlement.
+        private void StartTurn()
         {
             _hasRolledThisTurn = false;
             for (int step = 0; step < _actorCount; step++)
             {
-                _currentActor = (_currentActor + 1) % _actorCount;
                 if (ActorHasLiveStones(_currentActor))
                 {
-                    return;
+                    SettleCurrentActor();
+                    if (ActorHasLiveStones(_currentActor))
+                    {
+                        return;
+                    }
                 }
+
+                _currentActor = (_currentActor + 1) % _actorCount;
             }
             // No actor has stones left; leave the current actor as is.
+        }
+
+        // Moves to the next actor and begins its turn.
+        private void AdvanceTurn()
+        {
+            _currentActor = (_currentActor + 1) % _actorCount;
+            StartTurn();
+        }
+
+        // Applies one round of damage-cell settlement to the current actor's own stones (design doc 3.4/3.5).
+        private void SettleCurrentActor()
+        {
+            _settleIds.Clear();
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if (_actorOf[pucks[i].Id] == _currentActor)
+                {
+                    _settleIds.Add(pucks[i].Id);
+                }
+            }
+
+            _sim.SettleDamageCells(_settleIds, _cellDamage, _occupancyThreshold);
         }
 
         private bool ActorHasLiveStones(int actor)
@@ -1044,6 +1077,8 @@ namespace Puckmite.View
             _health = Mathf.RoundToInt(GUILayout.HorizontalSlider(_health, 1f, 8f));
             GUILayout.Label($"Occupancy threshold: {_occupancyThreshold:F2}");
             _occupancyThreshold = GUILayout.HorizontalSlider(_occupancyThreshold, 0.1f, 2f);
+            GUILayout.Label($"Cell damage: {_cellDamage}");
+            _cellDamage = Mathf.RoundToInt(GUILayout.HorizontalSlider(_cellDamage, 1f, 5f));
 
             GUILayout.Space(6f);
             GUILayout.BeginHorizontal();
