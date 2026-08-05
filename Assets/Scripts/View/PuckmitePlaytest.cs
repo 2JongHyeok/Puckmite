@@ -85,7 +85,6 @@ namespace Puckmite.View
         private static readonly List<Color> _fillColors = new List<Color>();
         private SpriteRenderer[] _cellHighlights;                    // pool of occupied-cell overlays
         private readonly List<int> _occupiedCells = new List<int>(); // reused per puck each frame
-        private SpriteRenderer _aimLine;
         private LineRenderer _previewLine;
         private SpriteRenderer _previewMarker; // ghost circle at the cue's predicted final position
         private readonly List<Vector3> _previewPoints = new List<Vector3>();
@@ -184,7 +183,6 @@ namespace Puckmite.View
             BuildPuckViews();
             BuildTurnRings();
             BuildCharacters();
-            BuildAimLine();
             BuildPreviewLine();
             BuildPreviewMarker();
             StartTurn();
@@ -465,16 +463,16 @@ namespace Puckmite.View
 
             if (_aiming && _sim.TryGetPuck(_aimingPuckId, out Puck aimPuck))
             {
-                UpdateAimLine(aimPuck.Position, world);
-
-                Vector2 drag = world - aimPuck.Position;
+                Vector2 drag = PullbackDrag(aimPuck.Position, world);
                 if (drag.magnitude >= MinDrag)
                 {
-                    float power = _maxPower * DragToPowerFraction(drag.magnitude);
+                    _currentPowerFraction = DragToPowerFraction(drag.magnitude);
+                    float power = _maxPower * _currentPowerFraction;
                     ComputePreview(_aimingPuckId, drag.normalized * power);
                 }
                 else
                 {
+                    _currentPowerFraction = 0f;
                     HidePreview();
                 }
             }
@@ -482,12 +480,11 @@ namespace Puckmite.View
             if (mouse.leftButton.wasReleasedThisFrame && _aiming)
             {
                 _aiming = false;
-                _aimLine.gameObject.SetActive(false);
                 HidePreview();
 
                 if (_sim.TryGetPuck(_aimingPuckId, out Puck p))
                 {
-                    Vector2 drag = world - p.Position;
+                    Vector2 drag = PullbackDrag(p.Position, world);
                     if (drag.magnitude >= MinDrag)
                     {
                         float power = _maxPower * DragToPowerFraction(drag.magnitude);
@@ -499,6 +496,13 @@ namespace Puckmite.View
 
                 _aimingPuckId = -1;
             }
+        }
+
+        // Cue-shot aiming: the cursor is pulled back behind the stone and the stone flies the opposite way,
+        // so the launch vector points from the cursor to the stone. Its length is the drag distance.
+        private static Vector2 PullbackDrag(Vector2 puckPosition, Vector2 cursor)
+        {
+            return puckPosition - cursor;
         }
 
         // Closest puck to the point, if within a forgiving grab radius; -1 if the click is in open space.
@@ -720,17 +724,6 @@ namespace Puckmite.View
         private static Color OwnerColor(PuckOwner owner)
         {
             return owner == PuckOwner.Player ? new Color(0.30f, 0.75f, 1f) : new Color(1f, 0.45f, 0.35f);
-        }
-
-        private void BuildAimLine()
-        {
-            GameObject go = new GameObject("AimLine");
-            go.transform.SetParent(transform, false);
-
-            _aimLine = go.AddComponent<SpriteRenderer>();
-            _aimLine.sprite = ProceduralSprites.Unit();
-            _aimLine.sortingOrder = 11;
-            go.SetActive(false);
         }
 
         private void BuildPreviewLine()
@@ -1336,32 +1329,6 @@ namespace Puckmite.View
             }
 
             _appliedHealth = _health;
-        }
-
-        private void UpdateAimLine(Vector2 from, Vector2 to)
-        {
-            Vector2 direction = to - from;
-            float distance = direction.magnitude;
-            if (distance < 1e-4f)
-            {
-                _aimLine.gameObject.SetActive(false);
-                _currentPowerFraction = 0f;
-                return;
-            }
-
-            float dragForMax = _maxPower / Mathf.Max(0.0001f, _powerScale);
-            float length = Mathf.Min(distance, dragForMax); // line follows the cursor up to the max-power drag
-            _currentPowerFraction = DragToPowerFraction(distance);
-
-            Vector2 unit = direction / distance;
-            Vector2 mid = from + unit * (length * 0.5f);
-            float angle = Mathf.Atan2(unit.y, unit.x) * Mathf.Rad2Deg;
-
-            _aimLine.gameObject.SetActive(true);
-            _aimLine.transform.localPosition = new Vector3(mid.x, mid.y, 0f);
-            _aimLine.transform.localRotation = Quaternion.Euler(0f, 0f, angle);
-            _aimLine.transform.localScale = new Vector3(length, 0.18f, 1f);
-            _aimLine.color = Color.Lerp(new Color(0.5f, 1f, 0.4f, 0.9f), new Color(1f, 0.35f, 0.25f, 0.95f), _currentPowerFraction);
         }
 
         // Maps drag distance to a [0,1] power fraction with an adjustable curve (1 = linear, >1 = more
