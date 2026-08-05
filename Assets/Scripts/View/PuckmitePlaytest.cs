@@ -39,6 +39,9 @@ namespace Puckmite.View
         [SerializeField] private int _enemyBaseAttack = 1;
         [SerializeField] private int _enemyBaseShield = 0;
 
+        [Header("New stone entry")]
+        [SerializeField] private float _noStoneTurnDelay = 0.8f; // pause so a stoneless turn is readable
+
         [Header("Playback")]
         [SerializeField] private float _speedMultiplier = 1f;  // sim steps consumed per real second, x1/x2/x4
 
@@ -52,8 +55,8 @@ namespace Puckmite.View
         // Character row (design doc 2.2: player + enemy characters across the top, board below).
         private const float CharBodyY = 18.5f;       // body centre height, above the board top (12.5)
         private const float CharBodyRadius = 1.6f;
-        private const float CharStatOffset = -3.6f;  // name + stat block, centred below the body
-        private const float CharStatHeight = 4f;     // its box height (name + HP + ATK + SHD lines)
+        private const float CharStatOffset = -4.1f;  // name + stat block, centred below the body
+        private const float CharStatHeight = 5f;     // its box height (name + HP + ATK + SHD + STONES lines)
         private const float CharSpread = 9f;         // x of the leftmost/rightmost character
         private const float CharRowTop = 20.4f;      // the camera frames up to here
 
@@ -74,6 +77,14 @@ namespace Puckmite.View
         private static readonly Color RingStrong = new Color(1f, 0.9f, 0.25f, 0.9f);
         private static readonly Color RingFaint = new Color(1f, 0.9f, 0.25f, 0.25f);
         private static readonly Color RingLaunchReady = new Color(1f, 0.35f, 0.25f, 0.95f);
+        private static readonly Color RingBlocked = new Color(0.55f, 0.55f, 0.60f, 0.55f); // entry spot occupied
+
+        // How close to its entry edge the cursor must be before the waiting new stone follows it.
+        private const float GhostFollowRange = 6f;
+
+        // Highlight rings reach this far out from a stone's centre, in radii. The entry spot is inset by it
+        // so a waiting stone's ring clears the wall instead of being sliced by it.
+        private const float RingRadiusScale = 1.25f;
 
         private PuckSim _sim;
         private Camera _camera;
@@ -130,6 +141,23 @@ namespace Puckmite.View
         private string _gameOverText = "";
         private readonly List<int> _removeIds = new List<int>(); // reused: stones of an actor that just died
 
+        // New stone entry (design doc 3.3/3.4). The hand holds the ids of destroyed stones waiting to come
+        // back; an id reused this way keeps every id-indexed view array and _actorOf valid. Pending becomes
+        // ready at the owner's next turn start, so a stone lost this turn cannot be played this turn.
+        private List<int>[] _handReady;
+        private List<int>[] _handPending;
+
+        // The stone waiting on the entry edge. It lives here rather than in the sim until it is launched.
+        private bool _ghostActive;
+        private Puck _ghost;
+        private bool _ghostBlocked; // its spot overlaps a stone already on the board, so it cannot launch
+        private SpriteRenderer _ghostView;
+        private SpriteRenderer _ghostRing;
+
+        // A turn with nothing to roll: show that, then attack with base damage and end it (design doc 3.5).
+        private bool _noStoneTurn;
+        private float _noStoneTimer;
+
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
         private int _destroyedTotal;
@@ -161,6 +189,18 @@ namespace Puckmite.View
             ApplyHealthChangeIfNeeded();
             HandleInput();
             DriveSimulation();
+            // Nothing to roll: after the beat that shows it, go straight to the attack (design doc 3.5).
+            if (!_gameOver && _noStoneTurn)
+            {
+                _noStoneTimer -= Time.deltaTime;
+                if (_noStoneTimer <= 0f)
+                {
+                    _noStoneTurn = false;
+                    CaptureActorBuff(_currentActor); // no stones, so this is base stats only
+                    BeginAttackPhase();
+                }
+            }
+
             // Rolled and the board has settled: lock in the buff (step 3), then attack (step 4).
             if (!_gameOver && !_awaitingAttack && _hasRolledThisTurn && _sim.AllAtRest())
             {
@@ -171,6 +211,7 @@ namespace Puckmite.View
             UpdatePuckTransforms();
             UpdateCellHighlights();
             UpdateTurnHighlights();
+            UpdateGhost();
             UpdateCharacterStats();
         }
 
@@ -191,6 +232,7 @@ namespace Puckmite.View
             BuildPuckViews();
             BuildTurnRings();
             BuildCharacters();
+            BuildGhost();
             BuildPreviewLine();
             BuildPreviewMarker();
             StartTurn();
@@ -293,9 +335,10 @@ namespace Puckmite.View
                     {
                         _collisionTotal++;
                     }
-                    else
+                    else if (events[i].Type == PuckSimEventType.PuckDestroyed)
                     {
                         _destroyedTotal++;
+                        ReturnStoneToHand(events[i].PuckA); // comes back as a fresh stone (design doc 3.3)
                     }
                 }
 
@@ -344,31 +387,41 @@ namespace Puckmite.View
             _hasRolledThisTurn = false;
         }
 
-        // Begins _currentActor's turn: settle its stones (design doc 3.5 step 1). Actors that are down are
-        // skipped, and so are actors left with no stones on the board — they would roll a new stone from
-        // their entry edge (design doc 3.3/3.4), which is not built yet, so they cannot act at all.
+        // Begins _currentActor's turn: hand stones lost earlier become playable, then its own stones settle
+        // on the damage cells (design doc 3.5 step 1). Only a character that is down is skipped. An actor
+        // with nothing to roll still takes its turn — it just goes straight to its attack.
         private void StartTurn()
         {
             _hasRolledThisTurn = false;
             _awaitingAttack = false;
+            _noStoneTurn = false;
+            ClearGhost();
+
             for (int step = 0; step < _actorCount; step++)
             {
                 if (!_actorDead[_currentActor])
                 {
+                    PromoteHand(_currentActor);    // playable from this turn on (design doc 3.3)
                     ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
-                    if (ActorHasLiveStones(_currentActor))
+                    SettleCurrentActor();          // stones lost here go back to the hand as pending
+
+                    if (ActorHasLiveStones(_currentActor) || _handReady[_currentActor].Count > 0)
                     {
-                        SettleCurrentActor();
-                        if (ActorHasLiveStones(_currentActor))
-                        {
-                            return;
-                        }
+                        SetupGhost(_currentActor);
+                        return;
                     }
+
+                    // Nothing on the board and nothing playable in hand: no roll is possible. Hold a beat so
+                    // that is visible, then attack with base damage and end the turn (design doc 3.5).
+                    _noStoneTurn = true;
+                    _noStoneTimer = _noStoneTurnDelay;
+                    _attackLog = $"{ActorName(_currentActor)} has no stones — attacking with base damage.";
+                    return;
                 }
 
                 _currentActor = (_currentActor + 1) % _actorCount;
             }
-            // Nobody can act; leave the current actor as is.
+            // Every character is down; leave the current actor as is.
         }
 
         // Moves to the next actor and begins its turn.
@@ -392,6 +445,16 @@ namespace Puckmite.View
             }
 
             _sim.SettleDamageCells(_settleIds, _cellDamage, _occupancyThreshold);
+
+            // SettleDamageCells reports nothing, so the stones it destroyed are the ids it was handed that
+            // the sim no longer has. Those go back to their owner's hand (design doc 3.3).
+            for (int i = 0; i < _settleIds.Count; i++)
+            {
+                if (!_sim.TryGetPuck(_settleIds[i], out Puck _))
+                {
+                    ReturnStoneToHand(_settleIds[i]);
+                }
+            }
         }
 
         private bool ActorHasLiveStones(int actor)
@@ -460,13 +523,25 @@ namespace Puckmite.View
                 return;
             }
 
+            UpdateGhostAim(world);
+
             if (mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen) && !_hasRolledThisTurn)
             {
-                int id = NearestPuckId(world);
-                if (id >= 0)
+                // The waiting new stone is grabbed like any other; a board stone is the cue-shot choice
+                // (design doc 3.5 — the actor picks one or the other).
+                if (_ghostActive && (world - _ghost.Position).magnitude <= GrabRadius())
                 {
                     _aiming = true;
-                    _aimingPuckId = id;
+                    _aimingPuckId = _ghost.Id;
+                }
+                else
+                {
+                    int id = NearestPuckId(world);
+                    if (id >= 0)
+                    {
+                        _aiming = true;
+                        _aimingPuckId = id;
+                    }
                 }
             }
 
@@ -479,10 +554,10 @@ namespace Puckmite.View
                 HidePreview();
             }
 
-            if (_aiming && _sim.TryGetPuck(_aimingPuckId, out Puck aimPuck))
+            if (_aiming && TryGetAimedPosition(out Vector2 aimPosition))
             {
-                Vector2 drag = PullbackDrag(aimPuck.Position, world);
-                _launchReady = drag.magnitude >= MinDrag;
+                Vector2 drag = PullbackDrag(aimPosition, world);
+                _launchReady = drag.magnitude >= MinDrag && !(IsAimingGhost() && _ghostBlocked);
                 if (_launchReady)
                 {
                     _currentPowerFraction = DragToPowerFraction(drag.magnitude);
@@ -498,16 +573,29 @@ namespace Puckmite.View
 
             if (mouse.leftButton.wasReleasedThisFrame && _aiming)
             {
+                bool wasGhost = IsAimingGhost();
+                bool blocked = wasGhost && _ghostBlocked;
+                bool hasPosition = TryGetAimedPosition(out Vector2 releasePosition);
+
                 _aiming = false;
                 HidePreview();
 
-                if (_sim.TryGetPuck(_aimingPuckId, out Puck p))
+                if (hasPosition && !blocked)
                 {
-                    Vector2 drag = PullbackDrag(p.Position, world);
+                    Vector2 drag = PullbackDrag(releasePosition, world);
                     if (drag.magnitude >= MinDrag)
                     {
                         float power = _maxPower * DragToPowerFraction(drag.magnitude);
-                        _sim.SetVelocity(_aimingPuckId, drag.normalized * power);
+                        Vector2 velocity = drag.normalized * power;
+                        if (wasGhost)
+                        {
+                            LaunchGhost(velocity);
+                        }
+                        else
+                        {
+                            _sim.SetVelocity(_aimingPuckId, velocity);
+                        }
+
                         _accumulator = 0f;
                         _hasRolledThisTurn = true; // one forced roll per turn (design doc 3.5)
                     }
@@ -515,6 +603,36 @@ namespace Puckmite.View
 
                 _aimingPuckId = -1;
             }
+        }
+
+        private bool IsAimingGhost()
+        {
+            return _ghostActive && _aiming && _aimingPuckId == _ghost.Id;
+        }
+
+        // Where the stone being aimed sits — the waiting new stone lives outside the sim, so it is read
+        // from the ghost rather than looked up by Id.
+        private bool TryGetAimedPosition(out Vector2 position)
+        {
+            if (IsAimingGhost())
+            {
+                position = _ghost.Position;
+                return true;
+            }
+
+            if (_sim.TryGetPuck(_aimingPuckId, out Puck p))
+            {
+                position = p.Position;
+                return true;
+            }
+
+            position = Vector2.zero;
+            return false;
+        }
+
+        private float GrabRadius()
+        {
+            return Mathf.Max(_puckRadius * 2.5f, 3f);
         }
 
         // Cue-shot aiming: the cursor is pulled back behind the stone and the stone flies the opposite way,
@@ -527,7 +645,7 @@ namespace Puckmite.View
         // Closest puck to the point, if within a forgiving grab radius; -1 if the click is in open space.
         private int NearestPuckId(Vector2 world)
         {
-            float grab = Mathf.Max(_puckRadius * 2.5f, 3f);
+            float grab = GrabRadius();
             float bestSqr = grab * grab;
             int best = -1;
 
@@ -745,6 +863,24 @@ namespace Puckmite.View
             return owner == PuckOwner.Player ? new Color(0.30f, 0.75f, 1f) : new Color(1f, 0.45f, 0.35f);
         }
 
+        // The waiting new stone and its ring. Built once like every other renderer here and toggled per frame.
+        private void BuildGhost()
+        {
+            GameObject ringGo = new GameObject("EntryGhostRing");
+            ringGo.transform.SetParent(transform, false);
+            _ghostRing = ringGo.AddComponent<SpriteRenderer>();
+            _ghostRing.sprite = ProceduralSprites.Circle();
+            _ghostRing.sortingOrder = 8; // same layer as the stone turn rings
+            _ghostRing.enabled = false;
+
+            GameObject go = new GameObject("EntryGhost");
+            go.transform.SetParent(transform, false);
+            _ghostView = go.AddComponent<SpriteRenderer>();
+            _ghostView.sprite = ProceduralSprites.Circle();
+            _ghostView.sortingOrder = 9; // just under the stones on the board
+            _ghostView.enabled = false;
+        }
+
         private void BuildPreviewLine()
         {
             GameObject go = new GameObject("PreviewLine");
@@ -822,6 +958,14 @@ namespace Puckmite.View
             _actorBaseShield = new int[_actorCount];
             _actorEffectShield = new int[_actorCount];
             _actorDead = new bool[_actorCount];
+            _handReady = new List<int>[_actorCount];
+            _handPending = new List<int>[_actorCount];
+            for (int actor = 0; actor < _actorCount; actor++)
+            {
+                _handReady[actor] = new List<int>();
+                _handPending[actor] = new List<int>();
+            }
+
             ResetCombatState();
 
             for (int actor = 0; actor < _actorCount; actor++)
@@ -953,8 +1097,9 @@ namespace Puckmite.View
 
                 string attack = FormatStat(BaseAttack(actor), _actorBuffAttack[actor]);
                 string shield = FormatStat(_actorBaseShield[actor], _actorEffectShield[actor]);
+                string stones = FormatStat(_handReady[actor].Count, _handPending[actor].Count);
                 _characterStatTexts[actor].text =
-                    $"<b>{ActorName(actor)}</b>\nHP {_actorHealth[actor]}/{BaseHealth(actor)}\nATK {attack}\nSHD {shield}";
+                    $"<b>{ActorName(actor)}</b>\nHP {_actorHealth[actor]}/{BaseHealth(actor)}\nATK {attack}\nSHD {shield}\nSTONES {stones}";
 
                 _characterBodies[actor].color = ActorColor(actor);
                 UpdateCharacterRing(actor);
@@ -1028,6 +1173,162 @@ namespace Puckmite.View
             _actorEffectShield[actor] = 0;
         }
 
+        // --- Hand and new stone entry (design doc 3.3/3.4) ------------------------------------------
+
+        // A destroyed stone becomes a fresh stone in its owner's hand. Its Id is reused, which is what keeps
+        // every Id-indexed view array and _actorOf valid — a brand new Id would run off the end of them.
+        private void ReturnStoneToHand(int puckId)
+        {
+            if (_handPending == null || puckId < 0 || puckId >= _actorOf.Length)
+            {
+                return;
+            }
+
+            int actor = _actorOf[puckId];
+            if (_actorDead[actor])
+            {
+                return; // a character that is out does not get its stones back
+            }
+
+            if (!_handPending[actor].Contains(puckId) && !_handReady[actor].Contains(puckId))
+            {
+                _handPending[actor].Add(puckId);
+            }
+        }
+
+        // Turn start: stones that came back earlier become playable now — "다음 턴부터 사용 가능" (design doc
+        // 3.3). Anything lost later this turn lands in pending and so waits for the turn after.
+        private void PromoteHand(int actor)
+        {
+            for (int i = 0; i < _handPending[actor].Count; i++)
+            {
+                _handReady[actor].Add(_handPending[actor][i]);
+            }
+
+            _handPending[actor].Clear();
+        }
+
+        // Puts the next playable stone on the actor's entry edge, ready to be aimed. No ready stone, no ghost.
+        private void SetupGhost(int actor)
+        {
+            if (_handReady[actor].Count == 0)
+            {
+                ClearGhost();
+                return;
+            }
+
+            PuckOwner owner = actor == 0 ? PuckOwner.Player : PuckOwner.Enemy;
+            _ghost = new Puck(_handReady[actor][0], EntryPoint(actor, 0f), _puckRadius, 1f, owner) { Health = _health };
+            _ghostActive = true;
+            _ghostBlocked = false;
+        }
+
+        private void ClearGhost()
+        {
+            _ghostActive = false;
+            _ghostBlocked = false;
+        }
+
+        // The entry edge: the player's new stones come in on the left, an enemy's on the right, hugging that
+        // wall (design doc 3.4). The inset is the highlight ring's reach rather than the stone's radius, so
+        // the ring is not cut off by the wall; it stays well inside PuckSim's wall clamp, so the stone does
+        // not jump on its first step, and still sits squarely in the entry damage column. Only y varies — a
+        // new stone slides along its own edge and no further.
+        private Vector2 EntryPoint(int actor, float y)
+        {
+            float inset = _puckRadius * RingRadiusScale;
+            float x = actor == 0 ? _sim.BoardMin.x + inset : _sim.BoardMax.x - inset;
+            float minY = _sim.BoardMin.y + inset;
+            float maxY = _sim.BoardMax.y - inset;
+            return new Vector2(x, Mathf.Clamp(y, minY, maxY));
+        }
+
+        // Slides the waiting stone along its edge to follow the cursor, and checks whether that spot is free.
+        private void UpdateGhostAim(Vector2 world)
+        {
+            if (!_ghostActive || _hasRolledThisTurn)
+            {
+                return;
+            }
+
+            if (!_aiming && Mathf.Abs(world.x - _ghost.Position.x) <= GhostFollowRange)
+            {
+                _ghost.Position = EntryPoint(_currentActor, world.y);
+            }
+
+            // Launching from inside another stone would shove it aside for free, so that spot is refused.
+            _ghostBlocked = false;
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if ((pucks[i].Position - _ghost.Position).magnitude < pucks[i].Radius + _ghost.Radius)
+                {
+                    _ghostBlocked = true;
+                    return;
+                }
+            }
+        }
+
+        // The new stone enters the board where the ghost stands and rolls in the same motion (design doc 3.5).
+        private void LaunchGhost(Vector2 velocity)
+        {
+            _handReady[_currentActor].Remove(_ghost.Id);
+
+            Puck stone = _ghost;
+            stone.Health = _health;
+            stone.Velocity = velocity;
+            _sim.AddPuck(stone);
+
+            _xpFillFraction[stone.Id] = -1f; // drop the fill cached for whatever last used this Id
+            ClearGhost();
+        }
+
+        private void UpdateGhost()
+        {
+            if (_ghostView == null)
+            {
+                return;
+            }
+
+            if (!_ghostActive || _hasRolledThisTurn)
+            {
+                _ghostView.enabled = false;
+                _ghostRing.enabled = false;
+                return;
+            }
+
+            float diameter = _ghost.Radius * 2f;
+            Vector3 position = new Vector3(_ghost.Position.x, _ghost.Position.y, 0f);
+            _ghostView.transform.localPosition = position;
+            _ghostView.transform.localScale = new Vector3(diameter, diameter, 1f);
+
+            Color body = OwnerColor(_ghost.Owner);
+            body.a = _ghostBlocked ? 0.2f : 0.5f; // translucent: it is not on the board yet
+            _ghostView.color = body;
+            _ghostView.enabled = true;
+
+            float ringDiameter = _ghost.Radius * RingRadiusScale * 2f;
+            _ghostRing.transform.localPosition = position;
+            _ghostRing.transform.localScale = new Vector3(ringDiameter, ringDiameter, 1f);
+            _ghostRing.color = GhostRingColor();
+            _ghostRing.enabled = true;
+        }
+
+        private Color GhostRingColor()
+        {
+            if (_ghostBlocked)
+            {
+                return RingBlocked;
+            }
+
+            if (!IsAimingGhost())
+            {
+                return RingFaint; // available, but not the stone being aimed
+            }
+
+            return _launchReady ? RingLaunchReady : RingStrong;
+        }
+
         // --- Character combat (design doc 3.5 step 4, 3.6, 3.8) --------------------------------------
 
         // Restores every character to full: health, base shield pool, no buffs, nobody down, game on.
@@ -1040,12 +1341,16 @@ namespace Puckmite.View
                 _actorEffectShield[actor] = 0;
                 _actorBuffAttack[actor] = 0;
                 _actorDead[actor] = false;
+                _handReady[actor].Clear();
+                _handPending[actor].Clear();
             }
 
             _awaitingAttack = false;
             _gameOver = false;
             _gameOverText = "";
             _attackLog = "";
+            _noStoneTurn = false;
+            ClearGhost();
         }
 
         // Turn step 4: the attack is forced, one target. The player picks by clicking an enemy character;
@@ -1108,6 +1413,12 @@ namespace Puckmite.View
             _actorBaseShield[actor] = 0;
             _actorEffectShield[actor] = 0;
             _actorBuffAttack[actor] = 0;
+            _handReady[actor].Clear();   // a character that is out keeps nothing in hand
+            _handPending[actor].Clear();
+            if (_ghostActive && _actorOf[_ghost.Id] == actor)
+            {
+                ClearGhost();
+            }
 
             _removeIds.Clear();
             IReadOnlyList<Puck> pucks = _sim.Pucks;
@@ -1395,6 +1706,11 @@ namespace Puckmite.View
             System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
             PuckSim clone = _sim.Clone();
+            if (IsAimingGhost())
+            {
+                clone.AddPuck(_ghost); // the waiting stone is not in the real sim yet, so preview it here
+            }
+
             clone.SetVelocity(cueId, launchVelocity);
             clone.SetHealth(cueId, 1_000_000); // never destroy the cue in the preview (design doc 6.2)
 
@@ -1546,12 +1862,22 @@ namespace Puckmite.View
         // What the current actor is waiting on, for the HUD turn line.
         private string TurnPrompt()
         {
+            if (_noStoneTurn)
+            {
+                return "(no stones to roll)";
+            }
+
             if (_awaitingAttack)
             {
                 return "(click an enemy to attack)";
             }
 
-            return _hasRolledThisTurn ? "(rolling…)" : "roll a highlighted stone";
+            if (_hasRolledThisTurn)
+            {
+                return "(rolling…)";
+            }
+
+            return _ghostActive ? "roll a stone, or the new one on your edge" : "roll a highlighted stone";
         }
     }
 }
