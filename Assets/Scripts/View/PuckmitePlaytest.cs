@@ -37,12 +37,19 @@ namespace Puckmite.View
         private const float MaxAccumulated = 0.1f; // clamp so a hitch cannot trigger a step burst
         private const int MaxStepsPerFrame = 4000;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 520f);
+        // Trajectory preview: safety cap on how many steps to roll the cue forward when tracing its path.
+        private const int PreviewMaxSteps = 2000;
+
+        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 540f);
 
         private PuckSim _sim;
         private Camera _camera;
         private SpriteRenderer[] _puckViews; // indexed by puck Id (layout uses contiguous Ids from 0)
         private SpriteRenderer _aimLine;
+        private LineRenderer _previewLine;
+        private SpriteRenderer _previewMarker; // ghost circle at the cue's predicted final position
+        private readonly List<Vector3> _previewPoints = new List<Vector3>();
+        private float _previewMs; // last preview compute time, shown in the HUD
 
         private float _accumulator;
         private bool _aiming;
@@ -94,6 +101,8 @@ namespace Puckmite.View
             BuildBoard();
             BuildPuckViews();
             BuildAimLine();
+            BuildPreviewLine();
+            BuildPreviewMarker();
             UpdatePuckTransforms();
         }
 
@@ -233,12 +242,24 @@ namespace Puckmite.View
             if (_aiming && _sim.TryGetPuck(_aimingPuckId, out Puck aimPuck))
             {
                 UpdateAimLine(aimPuck.Position, world);
+
+                Vector2 drag = world - aimPuck.Position;
+                if (drag.magnitude >= MinDrag)
+                {
+                    float power = _maxPower * DragToPowerFraction(drag.magnitude);
+                    ComputePreview(_aimingPuckId, drag.normalized * power);
+                }
+                else
+                {
+                    HidePreview();
+                }
             }
 
             if (mouse.leftButton.wasReleasedThisFrame && _aiming)
             {
                 _aiming = false;
                 _aimLine.gameObject.SetActive(false);
+                HidePreview();
 
                 if (_sim.TryGetPuck(_aimingPuckId, out Puck p))
                 {
@@ -393,6 +414,37 @@ namespace Puckmite.View
             go.SetActive(false);
         }
 
+        private void BuildPreviewLine()
+        {
+            GameObject go = new GameObject("PreviewLine");
+            go.transform.SetParent(transform, false);
+
+            _previewLine = go.AddComponent<LineRenderer>();
+            _previewLine.material = new Material(Shader.Find("Sprites/Default"));
+            _previewLine.useWorldSpace = true;
+            _previewLine.widthMultiplier = 0.15f;
+            _previewLine.numCapVertices = 2;
+            _previewLine.numCornerVertices = 2;
+            _previewLine.textureMode = LineTextureMode.Stretch;
+            _previewLine.startColor = new Color(0.55f, 0.95f, 1f, 0.9f);
+            _previewLine.endColor = new Color(0.55f, 0.95f, 1f, 0.35f);
+            _previewLine.sortingOrder = 12;
+            _previewLine.positionCount = 0;
+            _previewLine.enabled = false;
+        }
+
+        private void BuildPreviewMarker()
+        {
+            GameObject go = new GameObject("PreviewMarker");
+            go.transform.SetParent(transform, false);
+
+            _previewMarker = go.AddComponent<SpriteRenderer>();
+            _previewMarker.sprite = ProceduralSprites.Circle();
+            _previewMarker.color = new Color(0.55f, 0.95f, 1f, 0.35f); // translucent cyan "landing" ghost
+            _previewMarker.sortingOrder = 9; // just under the pucks
+            _previewMarker.enabled = false;
+        }
+
         private void UpdatePuckTransforms()
         {
             IReadOnlyList<Puck> pucks = _sim.Pucks;
@@ -441,6 +493,92 @@ namespace Puckmite.View
             return Mathf.Pow(t, Mathf.Max(0.0001f, _powerCurve));
         }
 
+        // Rolls out a clone of the sim (never the real one — design doc 7.9) to draw the cue puck's path
+        // to its final resting spot. Any stone the cue strikes is removed from the clone so a struck stone
+        // can never bounce back into the cue's path: the preview is a one-time-bumper prediction, not a
+        // full cascade, so it can diverge from reality exactly in that case (by design, 6.2). Timed for the HUD.
+        private void ComputePreview(int cueId, Vector2 launchVelocity)
+        {
+            System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            PuckSim clone = _sim.Clone();
+            clone.SetVelocity(cueId, launchVelocity);
+
+            _previewPoints.Clear();
+            if (!clone.TryGetPuck(cueId, out Puck cue))
+            {
+                HidePreview();
+                return;
+            }
+
+            _previewPoints.Add(new Vector3(cue.Position.x, cue.Position.y, 0f));
+
+            for (int step = 0; step < PreviewMaxSteps; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = clone.Step();
+
+                // Drop any stone the cue struck this step so it cannot cascade back into the cue's path.
+                for (int i = 0; i < events.Count; i++)
+                {
+                    PuckSimEvent e = events[i];
+                    if (e.Type != PuckSimEventType.PuckCollision)
+                    {
+                        continue;
+                    }
+
+                    if (e.PuckA == cueId)
+                    {
+                        clone.RemovePuck(e.PuckB);
+                    }
+                    else if (e.PuckB == cueId)
+                    {
+                        clone.RemovePuck(e.PuckA);
+                    }
+                }
+
+                if (!clone.TryGetPuck(cueId, out cue))
+                {
+                    break;
+                }
+
+                _previewPoints.Add(new Vector3(cue.Position.x, cue.Position.y, 0f));
+
+                if (clone.AllAtRest())
+                {
+                    break;
+                }
+            }
+
+            stopwatch.Stop();
+            _previewMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+
+            _previewLine.positionCount = _previewPoints.Count;
+            for (int i = 0; i < _previewPoints.Count; i++)
+            {
+                _previewLine.SetPosition(i, _previewPoints[i]);
+            }
+            _previewLine.enabled = _previewPoints.Count >= 2;
+
+            Vector3 landing = _previewPoints[_previewPoints.Count - 1];
+            float diameter = _puckRadius * 2f;
+            _previewMarker.transform.localPosition = new Vector3(landing.x, landing.y, 0f);
+            _previewMarker.transform.localScale = new Vector3(diameter, diameter, 1f);
+            _previewMarker.enabled = true;
+        }
+
+        private void HidePreview()
+        {
+            if (_previewLine != null)
+            {
+                _previewLine.enabled = false;
+            }
+
+            if (_previewMarker != null)
+            {
+                _previewMarker.enabled = false;
+            }
+        }
+
         // --- HUD ----------------------------------------------------------------------------------
 
         private void OnGUI()
@@ -456,6 +594,7 @@ namespace Puckmite.View
             GUILayout.Label($"Pucks: {_sim.Pucks.Count}    At rest: {_sim.AllAtRest()}");
             GUILayout.Label($"Wall bounces: {_wallBounceTotal}    Collisions: {_collisionTotal}");
             GUILayout.Label(_aiming ? $"Power: {_currentPowerFraction * 100f:F0}%" : "Power: -");
+            GUILayout.Label($"Preview: {_previewMs:F3} ms");
 
             GUILayout.Space(6f);
             GUILayout.Label($"Friction: {_friction:F1}");
