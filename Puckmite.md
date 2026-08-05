@@ -362,7 +362,7 @@ Assets/Scripts/View   렌더링, 입력
 **완료된 것**
 
 - `Assets/Scripts/Sim` — 결정론적 헤드리스 2D 퍽 시뮬레이션
-  - Puck: Id, Position, Velocity, Radius, Mass, Owner, BounceCount
+  - Puck: Id, Position, Velocity, Radius, Mass, Owner, BounceCount, Health
   - PuckSim: 퍽 리스트 + 사각형 보드 경계, `Step()`
   - 등감속 마찰 (임계값 이하 0으로 스냅)
   - 벽 반사 + BounceCount 증가
@@ -373,18 +373,17 @@ Assets/Scripts/View   렌더링, 입력
   - `Step()`이 이벤트 리스트 반환 — `WallBounce(id)`, `PuckCollision(a, b, impulse)`. 한 번 할당한 버퍼를 Clear해 재사용
   - 서브스텝 적분 — 터널링 방지 (마찰은 스텝당 1회 유지해 정지거리 불변)
   - 충돌·벽 해소를 Id 오름차순으로 — 리스트 순서(파괴·재생성) 무관
-- 검증 코드 7종
-  - 같은 초기 상태에서 Simulate 두 번 → 동일 결과
-  - 속도 v로 발사 시 v²/(2a)의 1% 이내에서 정지
-  - 정면 충돌 시 운동량 보존
-  - 이벤트 결정론 — 같은 발사 두 번의 이벤트열이 완전 일치 (충돌 1회 이상 요구)
-  - 이벤트 발생 — 정면충돌 1회, 코너 2회 등 발생 개수·대상 Id 일치
-  - 터널링 없음 — 초고속 정면 사격이 통과 없이 충돌
-  - Id 순서 독립성 — 리스트 순서를 바꿔도 결과·이벤트열 동일
+  - 물리 파라미터 설정 클래스 `PuckSimConfig` (마찰·반발·정지 임계값·벽 감쇠·충돌 감쇠), `RemovePuck`/`SetHealth`
+  - 게임 규칙 일부: 스톤 체력, 팀이 다른 충돌 시 서로 -1(같은 팀 무피해), 체력 0 파괴 + `PuckDestroyed` 이벤트(그 스텝 물리는 먼저 적용)
+- 검증 코드 13종
+  - 결정론 / 정지거리 / 운동량 보존
+  - 이벤트 결정론 / 이벤트 발생 / 터널링 없음 / Id 순서 독립성
+  - 벽 감쇠 / 충돌 감쇠 / RemovePuck / SetHealth
+  - 교차 팀 데미지 / 체력 0 파괴
 
-**View** — 다중 퍽 플레이테스트(`Assets/Scripts/View`, `Assets/Editor/PuckmitePlaytestMenu`)가 있다: 런타임 생성 보드·벽·퍽, 클릭·드래그 발사, 궤적 미리보기, 배속, HUD 튜닝 슬라이더. 씬 파일·외부 아트 없음
+**View** — 다중 퍽 플레이테스트(`Assets/Scripts/View`, `Assets/Editor/PuckmitePlaytestMenu`)가 있다: 런타임 생성 보드·벽·퍽, 클릭·드래그 발사, 궤적 미리보기, 체력 호 표시·파괴, 배속, HUD 튜닝 슬라이더. 씬 파일·외부 아트 없음
 
-**아직 없는 것** — 정식 게임 규칙 전부 (체력·칸 효과·턴·공격·상점·적 AI)
+**아직 없는 것** — 칸 효과·턴·공격·경험치/레벨·상점·적 AI
 
 ## 7.8 개발 순서
 
@@ -504,7 +503,7 @@ Assets/Scripts/View   렌더링, 입력
 
 ## 10.1 수치 전반
 
-- 스톤의 체력 수치
+- 스톤의 체력 수치 (놀이터 임시 5, 슬라이더 1~8로 튜닝 — 확정 아님)
 - 데미지 칸이 한 번에 깎는 양
 - 3x3 버프칸의 **등급 구조와 수치** (안쪽일수록 강하다는 방향만 확정)
 - 공격력·쉴드·데미지의 **계산식**

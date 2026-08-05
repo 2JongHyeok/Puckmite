@@ -26,6 +26,7 @@ namespace Puckmite.View
         [SerializeField] private float _powerScale = 6f;        // drag distance (world units) -> launch speed
         [SerializeField] private float _powerCurve = 1f;        // drag->power exponent; 1 = linear
         [SerializeField] private float _puckRadius = 1.5f;      // design doc: diameter 3 on a 5-wide cell
+        [SerializeField] private int _health = 5;               // stone health (design doc 3~5, 미정); 1..8 via HUD
 
         [Header("Playback")]
         [SerializeField] private float _speedMultiplier = 1f;  // sim steps consumed per real second, x1/x2/x4
@@ -40,11 +41,16 @@ namespace Puckmite.View
         // Trajectory preview: safety cap on how many steps to roll the cue forward when tracing its path.
         private const int PreviewMaxSteps = 2000;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 540f);
+        // Health display: max arc segments drawn around a puck (matches the health slider's max).
+        private const int MaxHealthArcs = 8;
+
+        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 600f);
 
         private PuckSim _sim;
         private Camera _camera;
         private SpriteRenderer[] _puckViews; // indexed by puck Id (layout uses contiguous Ids from 0)
+        private LineRenderer[][] _healthArcs; // [puckId][arc]: health shown as arc segments around the rim
+        private Material _arcMaterial;        // shared by every health arc
         private SpriteRenderer _aimLine;
         private LineRenderer _previewLine;
         private SpriteRenderer _previewMarker; // ghost circle at the cue's predicted final position
@@ -58,6 +64,7 @@ namespace Puckmite.View
 
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
+        private int _destroyedTotal;
 
         // Physics values currently baked into _sim; a mismatch with the fields triggers a rebuild.
         private float _appliedFriction;
@@ -65,6 +72,7 @@ namespace Puckmite.View
         private float _appliedRestThreshold;
         private float _appliedWallRestitution;
         private float _appliedCollisionSpeedKept;
+        private int _appliedHealth;
 
         private void Awake()
         {
@@ -82,6 +90,7 @@ namespace Puckmite.View
             }
 
             RebuildIfPhysicsChanged();
+            ApplyHealthChangeIfNeeded();
             HandleInput();
             DriveSimulation();
             UpdatePuckTransforms();
@@ -114,12 +123,12 @@ namespace Puckmite.View
             // start overlapping. Ids are contiguous from 0 so the view array can be indexed by Id.
             return new List<Puck>
             {
-                new Puck(0, new Vector2(-9f, -9f), _puckRadius, 1f, PuckOwner.Player),
-                new Puck(1, new Vector2(-9f, 0f), _puckRadius, 1f, PuckOwner.Player),
-                new Puck(2, new Vector2(-9f, 9f), _puckRadius, 1f, PuckOwner.Player),
-                new Puck(3, new Vector2(0f, 0f), _puckRadius, 1f, PuckOwner.Enemy),
-                new Puck(4, new Vector2(4f, 4f), _puckRadius, 1f, PuckOwner.Enemy),
-                new Puck(5, new Vector2(4f, -4f), _puckRadius, 1f, PuckOwner.Enemy),
+                new Puck(0, new Vector2(-9f, -9f), _puckRadius, 1f, PuckOwner.Player) { Health = _health },
+                new Puck(1, new Vector2(-9f, 0f), _puckRadius, 1f, PuckOwner.Player) { Health = _health },
+                new Puck(2, new Vector2(-9f, 9f), _puckRadius, 1f, PuckOwner.Player) { Health = _health },
+                new Puck(3, new Vector2(0f, 0f), _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
+                new Puck(4, new Vector2(4f, 4f), _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
+                new Puck(5, new Vector2(4f, -4f), _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
             };
         }
 
@@ -140,6 +149,7 @@ namespace Puckmite.View
             _appliedRestThreshold = _restThreshold;
             _appliedWallRestitution = _wallRestitution;
             _appliedCollisionSpeedKept = _collisionSpeedKept;
+            _appliedHealth = _health;
         }
 
         private void RebuildIfPhysicsChanged()
@@ -196,9 +206,13 @@ namespace Puckmite.View
                     {
                         _wallBounceTotal++;
                     }
-                    else
+                    else if (events[i].Type == PuckSimEventType.PuckCollision)
                     {
                         _collisionTotal++;
+                    }
+                    else
+                    {
+                        _destroyedTotal++;
                     }
                 }
 
@@ -213,6 +227,7 @@ namespace Puckmite.View
             _accumulator = 0f;
             _wallBounceTotal = 0;
             _collisionTotal = 0;
+            _destroyedTotal = 0;
             UpdatePuckTransforms();
         }
 
@@ -382,8 +397,11 @@ namespace Puckmite.View
 
         private void BuildPuckViews()
         {
+            _arcMaterial = new Material(Shader.Find("Sprites/Default"));
+
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             _puckViews = new SpriteRenderer[pucks.Count];
+            _healthArcs = new LineRenderer[pucks.Count][];
             for (int i = 0; i < pucks.Count; i++)
             {
                 Puck p = pucks[i];
@@ -395,6 +413,27 @@ namespace Puckmite.View
                 sr.color = OwnerColor(p.Owner);
                 sr.sortingOrder = 10;
                 _puckViews[p.Id] = sr;
+
+                LineRenderer[] arcs = new LineRenderer[MaxHealthArcs];
+                for (int a = 0; a < MaxHealthArcs; a++)
+                {
+                    GameObject arcGo = new GameObject($"Puck{p.Id}_HealthArc{a}");
+                    arcGo.transform.SetParent(transform, false);
+
+                    LineRenderer lr = arcGo.AddComponent<LineRenderer>();
+                    lr.sharedMaterial = _arcMaterial;
+                    lr.useWorldSpace = true;
+                    lr.widthMultiplier = 0.16f;
+                    lr.numCapVertices = 1;
+                    lr.numCornerVertices = 1;
+                    lr.startColor = new Color(1f, 1f, 1f, 0.95f);
+                    lr.endColor = new Color(1f, 1f, 1f, 0.95f);
+                    lr.sortingOrder = 11; // above the puck circle
+                    lr.enabled = false;
+                    arcs[a] = lr;
+                }
+
+                _healthArcs[p.Id] = arcs;
             }
         }
 
@@ -447,15 +486,87 @@ namespace Puckmite.View
 
         private void UpdatePuckTransforms()
         {
+            // Hide every puck and its arcs, then show only those still alive in the sim. Destroyed pucks
+            // (removed from the sim) simply stay hidden, and a reset restores them, with no extra tracking.
+            for (int id = 0; id < _puckViews.Length; id++)
+            {
+                _puckViews[id].enabled = false;
+                LineRenderer[] arcs = _healthArcs[id];
+                for (int a = 0; a < arcs.Length; a++)
+                {
+                    arcs[a].enabled = false;
+                }
+            }
+
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             for (int i = 0; i < pucks.Count; i++)
             {
                 Puck p = pucks[i];
-                Transform t = _puckViews[p.Id].transform;
-                t.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+                SpriteRenderer sr = _puckViews[p.Id];
+                sr.enabled = true;
                 float diameter = p.Radius * 2f;
-                t.localScale = new Vector3(diameter, diameter, 1f);
+                sr.transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+                sr.transform.localScale = new Vector3(diameter, diameter, 1f);
+
+                DrawHealthArcs(p);
             }
+        }
+
+        // Draws the puck's health as arc segments around its rim: the rim is split into (max health) slices
+        // and the current health's worth are shown, so losing a point removes one arc (design doc 6.3).
+        private void DrawHealthArcs(Puck p)
+        {
+            LineRenderer[] arcs = _healthArcs[p.Id];
+            int max = Mathf.Clamp(_health, 1, MaxHealthArcs);
+            int current = Mathf.Clamp(p.Health, 0, max);
+
+            float radius = p.Radius * 0.9f;
+            float stepDeg = 360f / max;
+            float gapDeg = Mathf.Clamp(stepDeg * 0.2f, 4f, 14f);
+
+            for (int i = 0; i < arcs.Length; i++)
+            {
+                if (i >= current)
+                {
+                    arcs[i].enabled = false;
+                    continue;
+                }
+
+                // Slot i runs clockwise from the top, inset by half the gap on each end.
+                float a0 = 90f - i * stepDeg - gapDeg * 0.5f;
+                float a1 = 90f - (i + 1) * stepDeg + gapDeg * 0.5f;
+                float spanDeg = Mathf.Abs(a0 - a1);
+                int points = Mathf.Clamp(Mathf.CeilToInt(spanDeg / 12f) + 1, 2, 24);
+
+                arcs[i].positionCount = points;
+                for (int k = 0; k < points; k++)
+                {
+                    float t = (float)k / (points - 1);
+                    float angleRad = Mathf.Lerp(a0, a1, t) * Mathf.Deg2Rad;
+                    float x = p.Position.x + Mathf.Cos(angleRad) * radius;
+                    float y = p.Position.y + Mathf.Sin(angleRad) * radius;
+                    arcs[i].SetPosition(k, new Vector3(x, y, 0f));
+                }
+
+                arcs[i].enabled = true;
+            }
+        }
+
+        // Refills every puck to the current max health when the health slider changes (positions kept).
+        private void ApplyHealthChangeIfNeeded()
+        {
+            if (_health == _appliedHealth)
+            {
+                return;
+            }
+
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                _sim.SetHealth(pucks[i].Id, _health);
+            }
+
+            _appliedHealth = _health;
         }
 
         private void UpdateAimLine(Vector2 from, Vector2 to)
@@ -503,6 +614,7 @@ namespace Puckmite.View
 
             PuckSim clone = _sim.Clone();
             clone.SetVelocity(cueId, launchVelocity);
+            clone.SetHealth(cueId, 1_000_000); // never destroy the cue in the preview (design doc 6.2)
 
             _previewPoints.Clear();
             if (!clone.TryGetPuck(cueId, out Puck cue))
@@ -593,6 +705,7 @@ namespace Puckmite.View
             GUILayout.Label("Puckmite Playtest");
             GUILayout.Label($"Pucks: {_sim.Pucks.Count}    At rest: {_sim.AllAtRest()}");
             GUILayout.Label($"Wall bounces: {_wallBounceTotal}    Collisions: {_collisionTotal}");
+            GUILayout.Label($"Destroyed: {_destroyedTotal}");
             GUILayout.Label(_aiming ? $"Power: {_currentPowerFraction * 100f:F0}%" : "Power: -");
             GUILayout.Label($"Preview: {_previewMs:F3} ms");
 
@@ -613,6 +726,8 @@ namespace Puckmite.View
             _maxPower = GUILayout.HorizontalSlider(_maxPower, 5f, 120f);
             GUILayout.Label($"Power curve: {_powerCurve:F2}");
             _powerCurve = GUILayout.HorizontalSlider(_powerCurve, 0.3f, 3f);
+            GUILayout.Label($"Max health: {_health}");
+            _health = Mathf.RoundToInt(GUILayout.HorizontalSlider(_health, 1f, 8f));
 
             GUILayout.Space(6f);
             GUILayout.BeginHorizontal();
