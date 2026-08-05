@@ -42,6 +42,8 @@ namespace Puckmite.Sim
                 CrossTeamDamageCheck(),
                 DestructionCheck(),
                 SetHealthCheck(),
+                CellOccupancyCheck(),
+                CellTypeCheck(),
             };
         }
 
@@ -490,6 +492,48 @@ namespace Puckmite.Sim
             bool passed = set && a.Health == 2 && b.Health == 5 && missingReturnsFalse;
             string detail = $"set={set}, id0 health={a.Health} (expect 2), id1 health={b.Health} (expect 5), missing->false={missingReturnsFalse}.";
             return new CheckResult("SetHealth", passed, detail);
+        }
+
+        /// <summary>Circle-vs-cell occupancy: centre cell alone, the 4-cell cross-point, and the threshold edge (design doc 3.2).</summary>
+        public static CheckResult CellOccupancyCheck()
+        {
+            Vector2 min = new Vector2(-12.5f, -12.5f);
+            Vector2 max = new Vector2(12.5f, 12.5f);
+            const float radius = 1.5f;
+            const float threshold = 0.3f;
+            List<int> cells = new List<int>();
+
+            // Board centre -> only the centre cell (col 2, row 2 => index 12).
+            BoardCells.GetOccupiedCells(min, max, new Vector2(0f, 0f), radius, threshold, cells);
+            bool centreOk = cells.Count == 1 && cells.Contains(12);
+
+            // Exactly on the shared corner at (2.5, 2.5) -> the four surrounding cells.
+            BoardCells.GetOccupiedCells(min, max, new Vector2(2.5f, 2.5f), radius, threshold, cells);
+            bool crossOk = cells.Count == 4 && cells.Contains(12) && cells.Contains(13) && cells.Contains(17) && cells.Contains(18);
+
+            // Crossing the x=2.5 boundary just under the threshold -> centre only; just over -> centre + right.
+            BoardCells.GetOccupiedCells(min, max, new Vector2(1.29f, 0f), radius, threshold, cells);
+            bool underOk = cells.Count == 1 && cells.Contains(12);
+            BoardCells.GetOccupiedCells(min, max, new Vector2(1.31f, 0f), radius, threshold, cells);
+            bool overOk = cells.Count == 2 && cells.Contains(12) && cells.Contains(13);
+
+            bool passed = centreOk && crossOk && underOk && overOk;
+            string detail = $"centre={centreOk}, cross-point={crossOk}, under-threshold={underOk}, over-threshold={overOk}.";
+            return new CheckResult("Cell occupancy", passed, detail);
+        }
+
+        /// <summary>Inner 3x3 cells are Buff, the outer ring is Damage (design doc 3.1).</summary>
+        public static CheckResult CellTypeCheck()
+        {
+            bool centreBuff = BoardCells.TypeOf(2, 2) == CellType.Buff;
+            bool innerCornersBuff = BoardCells.TypeOf(1, 1) == CellType.Buff && BoardCells.TypeOf(3, 3) == CellType.Buff;
+            bool outerCornersDamage = BoardCells.TypeOf(0, 0) == CellType.Damage && BoardCells.TypeOf(4, 4) == CellType.Damage;
+            bool edgesDamage = BoardCells.TypeOf(0, 2) == CellType.Damage && BoardCells.TypeOf(2, 4) == CellType.Damage;
+
+            bool passed = centreBuff && innerCornersBuff && outerCornersDamage && edgesDamage;
+            string detail =
+                $"centre buff={centreBuff}, inner corners buff={innerCornersBuff}, outer corners damage={outerCornersDamage}, edges damage={edgesDamage}.";
+            return new CheckResult("Cell type", passed, detail);
         }
 
         private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)

@@ -27,6 +27,7 @@ namespace Puckmite.View
         [SerializeField] private float _powerCurve = 1f;        // drag->power exponent; 1 = linear
         [SerializeField] private float _puckRadius = 1.5f;      // design doc: diameter 3 on a 5-wide cell
         [SerializeField] private int _health = 5;               // stone health (design doc 3~5, 미정); 1..8 via HUD
+        [SerializeField] private float _occupancyThreshold = 0.1f; // cross a cell boundary by this to occupy it (문서 3.2, 임시)
 
         [Header("Playback")]
         [SerializeField] private float _speedMultiplier = 1f;  // sim steps consumed per real second, x1/x2/x4
@@ -44,13 +45,18 @@ namespace Puckmite.View
         // Health display: max arc segments drawn around a puck (matches the health slider's max).
         private const int MaxHealthArcs = 8;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 600f);
+        // Cell-occupancy highlights: pool cap (6 pucks * up to 4 cells, with margin).
+        private const int MaxCellHighlights = 30;
+
+        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 640f);
 
         private PuckSim _sim;
         private Camera _camera;
         private SpriteRenderer[] _puckViews; // indexed by puck Id (layout uses contiguous Ids from 0)
         private LineRenderer[][] _healthArcs; // [puckId][arc]: health shown as arc segments around the rim
         private Material _arcMaterial;        // shared by every health arc
+        private SpriteRenderer[] _cellHighlights;                    // pool of occupied-cell overlays
+        private readonly List<int> _occupiedCells = new List<int>(); // reused per puck each frame
         private SpriteRenderer _aimLine;
         private LineRenderer _previewLine;
         private SpriteRenderer _previewMarker; // ghost circle at the cue's predicted final position
@@ -94,6 +100,7 @@ namespace Puckmite.View
             HandleInput();
             DriveSimulation();
             UpdatePuckTransforms();
+            UpdateCellHighlights();
         }
 
         // Builds (or rebuilds) everything this component owns. Destroys any children a previous build left
@@ -108,6 +115,7 @@ namespace Puckmite.View
             BuildSimFrom(InitialLayout());
             BuildCamera();
             BuildBoard();
+            BuildCellHighlights();
             BuildPuckViews();
             BuildAimLine();
             BuildPreviewLine();
@@ -484,6 +492,63 @@ namespace Puckmite.View
             _previewMarker.enabled = false;
         }
 
+        private void BuildCellHighlights()
+        {
+            _cellHighlights = new SpriteRenderer[MaxCellHighlights];
+            for (int i = 0; i < MaxCellHighlights; i++)
+            {
+                GameObject go = new GameObject($"CellHighlight{i}");
+                go.transform.SetParent(transform, false);
+
+                SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = ProceduralSprites.Unit();
+                sr.sortingOrder = 4; // above board/grid/walls (0..3), below pucks (10)
+                sr.enabled = false;
+                _cellHighlights[i] = sr;
+            }
+        }
+
+        // Overlays each cell a puck currently occupies with a translucent quad in the owner's colour,
+        // reading occupancy straight from BoardCells with the live threshold. Pooled, so it never allocates.
+        private void UpdateCellHighlights()
+        {
+            for (int i = 0; i < _cellHighlights.Length; i++)
+            {
+                _cellHighlights[i].enabled = false;
+            }
+
+            Vector2 boardMin = _sim.BoardMin;
+            Vector2 boardMax = _sim.BoardMax;
+            Vector2 cellSize = BoardCells.CellSize(boardMin, boardMax);
+            float w = cellSize.x * 0.9f;
+            float h = cellSize.y * 0.9f;
+
+            int next = 0;
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count && next < _cellHighlights.Length; i++)
+            {
+                Puck p = pucks[i];
+                BoardCells.GetOccupiedCells(boardMin, boardMax, p.Position, p.Radius, _occupancyThreshold, _occupiedCells);
+
+                Color color = OwnerColor(p.Owner);
+                color.a = 0.22f;
+
+                for (int c = 0; c < _occupiedCells.Count && next < _cellHighlights.Length; c++)
+                {
+                    int idx = _occupiedCells[c];
+                    int col = idx % BoardCells.Size;
+                    int row = idx / BoardCells.Size;
+                    Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
+
+                    SpriteRenderer sr = _cellHighlights[next++];
+                    sr.transform.localPosition = new Vector3(center.x, center.y, 0f);
+                    sr.transform.localScale = new Vector3(w, h, 1f);
+                    sr.color = color;
+                    sr.enabled = true;
+                }
+            }
+        }
+
         private void UpdatePuckTransforms()
         {
             // Hide every puck and its arcs, then show only those still alive in the sim. Destroyed pucks
@@ -728,6 +793,8 @@ namespace Puckmite.View
             _powerCurve = GUILayout.HorizontalSlider(_powerCurve, 0.3f, 3f);
             GUILayout.Label($"Max health: {_health}");
             _health = Mathf.RoundToInt(GUILayout.HorizontalSlider(_health, 1f, 8f));
+            GUILayout.Label($"Occupancy threshold: {_occupancyThreshold:F2}");
+            _occupancyThreshold = GUILayout.HorizontalSlider(_occupancyThreshold, 0.1f, 2f);
 
             GUILayout.Space(6f);
             GUILayout.BeginHorizontal();
