@@ -148,11 +148,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 28393aa3793582b4e97a71d6a67d88bf, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Puckmite.View.PuckmitePlaytest
-  _friction: 12
-  _restitution: 0.85
-  _restThreshold: 0.05
-  _maxPower: 45
-  _powerScale: 4
+  _friction: 10
+  _restitution: 1
+  _collisionSpeedKept: 0.7
+  _restThreshold: 0.4
+  _wallRestitution: 0.6
+  _maxPower: 50
+  _powerScale: 6
+  _powerCurve: 1
   _puckRadius: 1.5
   _speedMultiplier: 1
 --- !u!4 &339425072

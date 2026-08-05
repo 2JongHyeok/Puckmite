@@ -17,12 +17,15 @@ namespace Puckmite.View
     public sealed class PuckmitePlaytest : MonoBehaviour
     {
         [Header("Physics — temporary placeholders, tune by feel (values are 미정 in the design doc)")]
-        [SerializeField] private float _friction = 12f;       // constant deceleration, units/s^2
-        [SerializeField] private float _restitution = 0.85f;  // puck-to-puck bounciness
-        [SerializeField] private float _restThreshold = 0.05f;
-        [SerializeField] private float _maxPower = 45f;        // speed cap on a launch
-        [SerializeField] private float _powerScale = 4f;       // drag distance (world units) -> launch speed
-        [SerializeField] private float _puckRadius = 1.5f;     // design doc: diameter 3 on a 5-wide cell
+        [SerializeField] private float _friction = 10f;             // constant deceleration, units/s^2
+        [SerializeField] private float _restitution = 1f;           // puck-to-puck bounciness
+        [SerializeField] private float _collisionSpeedKept = 0.7f;  // speed kept after a puck-puck impact; 1 = no loss
+        [SerializeField] private float _restThreshold = 0.4f;
+        [SerializeField] private float _wallRestitution = 0.6f;     // reflected speed kept after a wall bounce
+        [SerializeField] private float _maxPower = 50f;         // speed cap on a launch
+        [SerializeField] private float _powerScale = 6f;        // drag distance (world units) -> launch speed
+        [SerializeField] private float _powerCurve = 1f;        // drag->power exponent; 1 = linear
+        [SerializeField] private float _puckRadius = 1.5f;      // design doc: diameter 3 on a 5-wide cell
 
         [Header("Playback")]
         [SerializeField] private float _speedMultiplier = 1f;  // sim steps consumed per real second, x1/x2/x4
@@ -34,7 +37,7 @@ namespace Puckmite.View
         private const float MaxAccumulated = 0.1f; // clamp so a hitch cannot trigger a step burst
         private const int MaxStepsPerFrame = 4000;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 360f);
+        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 520f);
 
         private PuckSim _sim;
         private Camera _camera;
@@ -53,22 +56,44 @@ namespace Puckmite.View
         private float _appliedFriction;
         private float _appliedRestitution;
         private float _appliedRestThreshold;
+        private float _appliedWallRestitution;
+        private float _appliedCollisionSpeedKept;
 
         private void Awake()
         {
+            Build();
+        }
+
+        private void Update()
+        {
+            // A script recompile during Play triggers a domain reload that clears runtime fields (_sim,
+            // views) without calling Awake again. Rebuild when that happens so the sandbox self-heals
+            // instead of throwing a NullReferenceException every frame.
+            if (_sim == null)
+            {
+                Build();
+            }
+
+            RebuildIfPhysicsChanged();
+            HandleInput();
+            DriveSimulation();
+            UpdatePuckTransforms();
+        }
+
+        // Builds (or rebuilds) everything this component owns. Destroys any children a previous build left
+        // so rebuilding after a domain reload does not stack duplicate boards and pucks.
+        private void Build()
+        {
+            for (int i = transform.childCount - 1; i >= 0; i--)
+            {
+                Destroy(transform.GetChild(i).gameObject);
+            }
+
             BuildSimFrom(InitialLayout());
             BuildCamera();
             BuildBoard();
             BuildPuckViews();
             BuildAimLine();
-            UpdatePuckTransforms();
-        }
-
-        private void Update()
-        {
-            RebuildIfPhysicsChanged();
-            HandleInput();
-            DriveSimulation();
             UpdatePuckTransforms();
         }
 
@@ -94,7 +119,7 @@ namespace Puckmite.View
             _sim = new PuckSim(
                 new Vector2(-BoardHalf, -BoardHalf),
                 new Vector2(BoardHalf, BoardHalf),
-                _friction, _restitution, _restThreshold);
+                new PuckSimConfig(_friction, _restitution, _restThreshold, _wallRestitution, _collisionSpeedKept));
 
             for (int i = 0; i < pucks.Count; i++)
             {
@@ -104,6 +129,8 @@ namespace Puckmite.View
             _appliedFriction = _friction;
             _appliedRestitution = _restitution;
             _appliedRestThreshold = _restThreshold;
+            _appliedWallRestitution = _wallRestitution;
+            _appliedCollisionSpeedKept = _collisionSpeedKept;
         }
 
         private void RebuildIfPhysicsChanged()
@@ -111,7 +138,9 @@ namespace Puckmite.View
             bool changed =
                 _friction != _appliedFriction ||
                 _restitution != _appliedRestitution ||
-                _restThreshold != _appliedRestThreshold;
+                _restThreshold != _appliedRestThreshold ||
+                _wallRestitution != _appliedWallRestitution ||
+                _collisionSpeedKept != _appliedCollisionSpeedKept;
             if (!changed)
             {
                 return;
@@ -216,7 +245,7 @@ namespace Puckmite.View
                     Vector2 drag = world - p.Position;
                     if (drag.magnitude >= MinDrag)
                     {
-                        float power = Mathf.Min(drag.magnitude * _powerScale, _maxPower);
+                        float power = _maxPower * DragToPowerFraction(drag.magnitude);
                         _sim.SetVelocity(_aimingPuckId, drag.normalized * power);
                         _accumulator = 0f;
                     }
@@ -388,9 +417,9 @@ namespace Puckmite.View
                 return;
             }
 
-            float maxLength = _maxPower / Mathf.Max(0.0001f, _powerScale);
-            float length = Mathf.Min(distance, maxLength);
-            _currentPowerFraction = length / maxLength;
+            float dragForMax = _maxPower / Mathf.Max(0.0001f, _powerScale);
+            float length = Mathf.Min(distance, dragForMax); // line follows the cursor up to the max-power drag
+            _currentPowerFraction = DragToPowerFraction(distance);
 
             Vector2 unit = direction / distance;
             Vector2 mid = from + unit * (length * 0.5f);
@@ -401,6 +430,15 @@ namespace Puckmite.View
             _aimLine.transform.localRotation = Quaternion.Euler(0f, 0f, angle);
             _aimLine.transform.localScale = new Vector3(length, 0.18f, 1f);
             _aimLine.color = Color.Lerp(new Color(0.5f, 1f, 0.4f, 0.9f), new Color(1f, 0.35f, 0.25f, 0.95f), _currentPowerFraction);
+        }
+
+        // Maps drag distance to a [0,1] power fraction with an adjustable curve (1 = linear, >1 = more
+        // precision at the low end, <1 = reaches high power sooner).
+        private float DragToPowerFraction(float dragDistance)
+        {
+            float dragForMax = _maxPower / Mathf.Max(0.0001f, _powerScale);
+            float t = Mathf.Clamp01(dragDistance / Mathf.Max(0.0001f, dragForMax));
+            return Mathf.Pow(t, Mathf.Max(0.0001f, _powerCurve));
         }
 
         // --- HUD ----------------------------------------------------------------------------------
@@ -424,10 +462,18 @@ namespace Puckmite.View
             _friction = GUILayout.HorizontalSlider(_friction, 0f, 40f);
             GUILayout.Label($"Restitution: {_restitution:F2}");
             _restitution = GUILayout.HorizontalSlider(_restitution, 0f, 1f);
+            GUILayout.Label($"Impact damping: {_collisionSpeedKept:F2}");
+            _collisionSpeedKept = GUILayout.HorizontalSlider(_collisionSpeedKept, 0.3f, 1f);
+            GUILayout.Label($"Rest threshold: {_restThreshold:F2}");
+            _restThreshold = GUILayout.HorizontalSlider(_restThreshold, 0f, 1f);
+            GUILayout.Label($"Wall damping: {_wallRestitution:F2}");
+            _wallRestitution = GUILayout.HorizontalSlider(_wallRestitution, 0.3f, 1f);
             GUILayout.Label($"Power scale: {_powerScale:F1}");
             _powerScale = GUILayout.HorizontalSlider(_powerScale, 0.5f, 10f);
             GUILayout.Label($"Max power: {_maxPower:F0}");
             _maxPower = GUILayout.HorizontalSlider(_maxPower, 5f, 120f);
+            GUILayout.Label($"Power curve: {_powerCurve:F2}");
+            _powerCurve = GUILayout.HorizontalSlider(_powerCurve, 0.3f, 3f);
 
             GUILayout.Space(6f);
             GUILayout.BeginHorizontal();
