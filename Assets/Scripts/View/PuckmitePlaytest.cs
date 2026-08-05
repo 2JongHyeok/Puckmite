@@ -53,12 +53,14 @@ namespace Puckmite.View
         private const int MaxStepsPerFrame = 4000;
 
         // Character row (design doc 2.2: player + enemy characters across the top, board below).
-        private const float CharBodyY = 18.5f;       // body centre height, above the board top (12.5)
+        // The row sits high enough that the five-line stat block clears the board's top wall (12.5 + half its
+        // 0.4 thickness): block bottom = CharBodyY + CharStatOffset - CharStatHeight/2 = 13.4.
+        private const float CharBodyY = 20f;         // body centre height, above the board top (12.5)
         private const float CharBodyRadius = 1.6f;
         private const float CharStatOffset = -4.1f;  // name + stat block, centred below the body
         private const float CharStatHeight = 5f;     // its box height (name + HP + ATK + SHD + STONES lines)
         private const float CharSpread = 9f;         // x of the leftmost/rightmost character
-        private const float CharRowTop = 20.4f;      // the camera frames up to here
+        private const float CharRowTop = 21.8f;      // the camera frames up to here
 
         // Trajectory preview: safety cap on how many steps to roll the cue forward when tracing its path.
         private const int PreviewMaxSteps = 2000;
@@ -224,7 +226,7 @@ namespace Puckmite.View
                 Destroy(transform.GetChild(i).gameObject);
             }
 
-            BuildSimFrom(InitialLayout());
+            BuildSimFrom(new List<Puck>()); // the board starts empty; every stone enters from a hand
             AssignActors();
             BuildCamera();
             BuildBoard();
@@ -242,19 +244,34 @@ namespace Puckmite.View
 
         // --- Simulation ---------------------------------------------------------------------------
 
-        private List<Puck> InitialLayout()
+        // Every stone in the match, by Id and team. The match starts with an EMPTY board (design doc 3.3/3.4):
+        // these all begin in their owner's hand and enter one at a time from the entry edge, so the roster
+        // carries no board position. Ids are contiguous from 0 because the view arrays are indexed by Id.
+        // Player count is the design doc's 2; the enemies get one each (per-enemy counts are 미정, 10.1).
+        private List<Puck> InitialRoster()
         {
-            // Player pucks down the left ("hand" side), an enemy cluster in the middle, spaced so none
-            // start overlapping. Ids are contiguous from 0 so the view array can be indexed by Id.
             return new List<Puck>
             {
-                new Puck(0, new Vector2(-9f, -9f), _puckRadius, 1f, PuckOwner.Player) { Health = _health },
-                new Puck(1, new Vector2(-9f, 0f), _puckRadius, 1f, PuckOwner.Player) { Health = _health },
-                new Puck(2, new Vector2(-9f, 9f), _puckRadius, 1f, PuckOwner.Player) { Health = _health },
-                new Puck(3, new Vector2(0f, 0f), _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
-                new Puck(4, new Vector2(4f, 4f), _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
-                new Puck(5, new Vector2(4f, -4f), _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
+                new Puck(0, Vector2.zero, _puckRadius, 1f, PuckOwner.Player) { Health = _health },
+                new Puck(1, Vector2.zero, _puckRadius, 1f, PuckOwner.Player) { Health = _health },
+                new Puck(2, Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
+                new Puck(3, Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
+                new Puck(4, Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
             };
+        }
+
+        private static int RosterMaxId(List<Puck> roster)
+        {
+            int maxId = 0;
+            for (int i = 0; i < roster.Count; i++)
+            {
+                if (roster[i].Id > maxId)
+                {
+                    maxId = roster[i].Id;
+                }
+            }
+
+            return maxId;
         }
 
         private void BuildSimFrom(List<Puck> pucks)
@@ -349,7 +366,7 @@ namespace Puckmite.View
 
         private void ResetPucks()
         {
-            BuildSimFrom(InitialLayout());
+            BuildSimFrom(new List<Puck>()); // the board starts empty; every stone enters from a hand
             AssignActors();
             ResetCombatState();
             _accumulator = 0f;
@@ -364,17 +381,8 @@ namespace Puckmite.View
         // stones); each enemy is its own actor (1, 2, 3, ...). Combat teams (Owner) are unchanged.
         private void AssignActors()
         {
-            List<Puck> roster = InitialLayout();
-            int maxId = 0;
-            for (int i = 0; i < roster.Count; i++)
-            {
-                if (roster[i].Id > maxId)
-                {
-                    maxId = roster[i].Id;
-                }
-            }
-
-            _actorOf = new int[maxId + 1];
+            List<Puck> roster = InitialRoster();
+            _actorOf = new int[RosterMaxId(roster) + 1];
             int nextEnemy = 1;
             for (int i = 0; i < roster.Count; i++)
             {
@@ -405,7 +413,11 @@ namespace Puckmite.View
                     ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                     SettleCurrentActor();          // stones lost here go back to the hand as pending
 
-                    if (ActorHasLiveStones(_currentActor) || _handReady[_currentActor].Count > 0)
+                    // A hand stone only counts as a move if somewhere on the edge is actually free — with no
+                    // board stone to cue either, a fully blocked edge would leave no legal roll and the turn
+                    // could never end.
+                    bool canEnter = _handReady[_currentActor].Count > 0 && HasFreeEntrySpot(_currentActor);
+                    if (ActorHasLiveStones(_currentActor) || canEnter)
                     {
                         SetupGhost(_currentActor);
                         return;
@@ -527,21 +539,20 @@ namespace Puckmite.View
 
             if (mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen) && !_hasRolledThisTurn)
             {
-                // The waiting new stone is grabbed like any other; a board stone is the cue-shot choice
-                // (design doc 3.5 — the actor picks one or the other).
-                if (_ghostActive && (world - _ghost.Position).magnitude <= GrabRadius())
+                // A stone already on the board wins the click (design doc 3.5 — the actor picks one or the
+                // other). The waiting new stone tracks the cursor along its edge, so it is always within
+                // reach there; letting it win would make every stone in the entry column unselectable. It is
+                // also not grabbable while its spot is blocked, since that click could never fire.
+                int id = NearestPuckId(world);
+                if (id >= 0)
+                {
+                    _aiming = true;
+                    _aimingPuckId = id;
+                }
+                else if (_ghostActive && !_ghostBlocked && (world - _ghost.Position).magnitude <= GrabRadius())
                 {
                     _aiming = true;
                     _aimingPuckId = _ghost.Id;
-                }
-                else
-                {
-                    int id = NearestPuckId(world);
-                    if (id >= 0)
-                    {
-                        _aiming = true;
-                        _aimingPuckId = id;
-                    }
                 }
             }
 
@@ -630,9 +641,12 @@ namespace Puckmite.View
             return false;
         }
 
+        // A stone is grabbed by clicking inside its highlight ring and no further, so what can be picked is
+        // exactly what is drawn. (This used to be the ring's diameter used as a radius — twice too wide,
+        // which let a stone swallow clicks aimed at the new stone waiting beside it.)
         private float GrabRadius()
         {
-            return Mathf.Max(_puckRadius * 2.5f, 3f);
+            return _puckRadius * RingRadiusScale;
         }
 
         // Cue-shot aiming: the cursor is pulled back behind the stone and the stone flies the opposite way,
@@ -785,17 +799,20 @@ namespace Puckmite.View
         {
             _arcMaterial = new Material(Shader.Find("Sprites/Default"));
 
-            IReadOnlyList<Puck> pucks = _sim.Pucks;
-            _puckViews = new SpriteRenderer[pucks.Count];
-            _healthArcs = new LineRenderer[pucks.Count][];
-            _levelTexts = new TextMeshPro[pucks.Count];
-            _levelRenderers = new MeshRenderer[pucks.Count];
-            _xpFillRenderers = new MeshRenderer[pucks.Count];
-            _xpFillMeshes = new Mesh[pucks.Count];
-            _xpFillFraction = new float[pucks.Count];
-            for (int i = 0; i < pucks.Count; i++)
+            // Sized from the roster, not the board: the board starts empty and stones arrive later, and these
+            // arrays are addressed by Puck.Id, so the length has to cover every Id the match can ever use.
+            List<Puck> roster = InitialRoster();
+            int slots = RosterMaxId(roster) + 1;
+            _puckViews = new SpriteRenderer[slots];
+            _healthArcs = new LineRenderer[slots][];
+            _levelTexts = new TextMeshPro[slots];
+            _levelRenderers = new MeshRenderer[slots];
+            _xpFillRenderers = new MeshRenderer[slots];
+            _xpFillMeshes = new Mesh[slots];
+            _xpFillFraction = new float[slots];
+            for (int i = 0; i < roster.Count; i++)
             {
-                Puck p = pucks[i];
+                Puck p = roster[i];
                 GameObject go = new GameObject($"Puck{p.Id}");
                 go.transform.SetParent(transform, false);
 
@@ -930,7 +947,7 @@ namespace Puckmite.View
 
         private void BuildTurnRings()
         {
-            int count = _sim.Pucks.Count;
+            int count = InitialRoster().Count; // the board is empty at build time; size for every stone
             _turnRings = new SpriteRenderer[count];
             for (int i = 0; i < count; i++)
             {
@@ -1097,7 +1114,10 @@ namespace Puckmite.View
 
                 string attack = FormatStat(BaseAttack(actor), _actorBuffAttack[actor]);
                 string shield = FormatStat(_actorBaseShield[actor], _actorEffectShield[actor]);
-                string stones = FormatStat(_handReady[actor].Count, _handPending[actor].Count);
+                // Playable count first; stones still waiting out a turn go in parentheses. Not FormatStat —
+                // that sums its two arguments, which would count the unplayable ones as available.
+                int pending = _handPending[actor].Count;
+                string stones = pending > 0 ? $"{_handReady[actor].Count} (+{pending})" : _handReady[actor].Count.ToString();
                 _characterStatTexts[actor].text =
                     $"<b>{ActorName(actor)}</b>\nHP {_actorHealth[actor]}/{BaseHealth(actor)}\nATK {attack}\nSHD {shield}\nSTONES {stones}";
 
@@ -1256,17 +1276,39 @@ namespace Puckmite.View
                 _ghost.Position = EntryPoint(_currentActor, world.y);
             }
 
-            // Launching from inside another stone would shove it aside for free, so that spot is refused.
-            _ghostBlocked = false;
+            _ghostBlocked = EntrySpotBlocked(_ghost.Position);
+        }
+
+        // Launching from inside another stone would shove it aside for free, so such a spot is refused.
+        private bool EntrySpotBlocked(Vector2 position)
+        {
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             for (int i = 0; i < pucks.Count; i++)
             {
-                if ((pucks[i].Position - _ghost.Position).magnitude < pucks[i].Radius + _ghost.Radius)
+                if ((pucks[i].Position - position).magnitude < pucks[i].Radius + _puckRadius)
                 {
-                    _ghostBlocked = true;
-                    return;
+                    return true;
                 }
             }
+
+            return false;
+        }
+
+        // Whether anywhere along this actor's edge is clear enough to bring a stone in.
+        private bool HasFreeEntrySpot(int actor)
+        {
+            float inset = _puckRadius * RingRadiusScale;
+            float minY = _sim.BoardMin.y + inset;
+            float maxY = _sim.BoardMax.y - inset;
+            for (float y = minY; y <= maxY; y += _puckRadius * 0.5f)
+            {
+                if (!EntrySpotBlocked(EntryPoint(actor, y)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         // The new stone enters the board where the ghost stands and rolls in the same motion (design doc 3.5).
@@ -1343,6 +1385,14 @@ namespace Puckmite.View
                 _actorDead[actor] = false;
                 _handReady[actor].Clear();
                 _handPending[actor].Clear();
+            }
+
+            // The match opens with an empty board: every stone in the roster starts in its owner's hand,
+            // playable from that actor's first turn (design doc 3.3/3.4).
+            List<Puck> roster = InitialRoster();
+            for (int i = 0; i < roster.Count; i++)
+            {
+                _handReady[_actorOf[roster[i].Id]].Add(roster[i].Id);
             }
 
             _awaitingAttack = false;
