@@ -47,6 +47,8 @@ namespace Puckmite.Sim
                 XpGainCheck(),
                 LevelCapCheck(),
                 SettleDamageCellsCheck(),
+                BuffKindCheck(),
+                BuffSumCheck(),
             };
         }
 
@@ -641,6 +643,43 @@ namespace Puckmite.Sim
             string detail =
                 $"1cell={p0.Health}(exp3), buff={p1.Health}(exp5), 3cell={p2.Health}(exp4), destroyed={deadGone}, unsettled={p4.Health}(exp5).";
             return new CheckResult("Damage cell settlement", passed, detail);
+        }
+
+        /// <summary>Buff-cell layout: checkerboard attack/shield, centre value 2, other inner 1, outer 0 (design doc 3.1).</summary>
+        public static CheckResult BuffKindCheck()
+        {
+            bool centreAttack = BoardCells.KindOf(2, 2) == BuffKind.Attack && BoardCells.BuffValue(2, 2) == 2;
+            bool cornerAttack = BoardCells.KindOf(1, 1) == BuffKind.Attack && BoardCells.BuffValue(1, 1) == 1;
+            bool edgesShield = BoardCells.KindOf(2, 1) == BuffKind.Shield && BoardCells.KindOf(1, 2) == BuffKind.Shield && BoardCells.BuffValue(2, 1) == 1;
+            bool outerZero = BoardCells.BuffValue(0, 0) == 0;
+
+            bool passed = centreAttack && cornerAttack && edgesShield && outerZero;
+            string detail = $"centre atk2={centreAttack}, corner atk1={cornerAttack}, edges shield={edgesShield}, outer 0={outerZero}.";
+            return new CheckResult("Buff kind", passed, detail);
+        }
+
+        /// <summary>A puck sums buff from every buff cell it occupies, attack and shield separately (design doc 3.2/3.6).</summary>
+        public static CheckResult BuffSumCheck()
+        {
+            Vector2 min = new Vector2(-12.5f, -12.5f);
+            Vector2 max = new Vector2(12.5f, 12.5f);
+            const float r = 1.5f;
+            const float thr = 0.3f;
+
+            BoardCells.SumBuffs(min, max, new Vector2(0f, 0f), r, thr, out int a0, out int s0);   // centre: attack 2
+            BoardCells.SumBuffs(min, max, new Vector2(0f, -5f), r, thr, out int a1, out int s1);  // shield cell (2,1)
+            BoardCells.SumBuffs(min, max, new Vector2(2.5f, -2.5f), r, thr, out int a2, out int s2); // cross-point: atk3 shield2
+            BoardCells.SumBuffs(min, max, new Vector2(-9f, 0f), r, thr, out int a3, out int s3);  // damage cell: none
+
+            bool centre = a0 == 2 && s0 == 0;
+            bool shieldCell = a1 == 0 && s1 == 1;
+            bool crossPoint = a2 == 3 && s2 == 2;
+            bool damageCell = a3 == 0 && s3 == 0;
+
+            bool passed = centre && shieldCell && crossPoint && damageCell;
+            string detail =
+                $"centre a{a0}s{s0}(exp2,0), shield a{a1}s{s1}(exp0,1), cross a{a2}s{s2}(exp3,2), damage a{a3}s{s3}(exp0,0).";
+            return new CheckResult("Buff sum", passed, detail);
         }
 
         private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)

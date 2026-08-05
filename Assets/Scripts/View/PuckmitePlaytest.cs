@@ -31,6 +31,14 @@ namespace Puckmite.View
         [SerializeField] private float _occupancyThreshold = 0.1f; // cross a cell boundary by this to occupy it (문서 3.2, 임시)
         [SerializeField] private int _cellDamage = 1;              // damage-cell settlement amount (문서 미정, 임시)
 
+        [Header("Character stats — temporary placeholders (values are 미정 in the design doc)")]
+        [SerializeField] private int _playerBaseHealth = 20;
+        [SerializeField] private int _playerBaseAttack = 2;
+        [SerializeField] private int _playerBaseShield = 0;
+        [SerializeField] private int _enemyBaseHealth = 10;
+        [SerializeField] private int _enemyBaseAttack = 1;
+        [SerializeField] private int _enemyBaseShield = 0;
+
         [Header("Playback")]
         [SerializeField] private float _speedMultiplier = 1f;  // sim steps consumed per real second, x1/x2/x4
 
@@ -40,6 +48,14 @@ namespace Puckmite.View
         private const float MinDrag = 0.3f;        // ignore tiny drags so a click does not fling
         private const float MaxAccumulated = 0.1f; // clamp so a hitch cannot trigger a step burst
         private const int MaxStepsPerFrame = 4000;
+
+        // Character row (design doc 2.2: player + enemy characters across the top, board below).
+        private const float CharBodyY = 18.5f;       // body centre height, above the board top (12.5)
+        private const float CharBodyRadius = 1.6f;
+        private const float CharStatOffset = -3.6f;  // name + stat block, centred below the body
+        private const float CharStatHeight = 4f;     // its box height (name + HP + ATK + SHD lines)
+        private const float CharSpread = 9f;         // x of the leftmost/rightmost character
+        private const float CharRowTop = 20.4f;      // the camera frames up to here
 
         // Trajectory preview: safety cap on how many steps to roll the cue forward when tracing its path.
         private const int PreviewMaxSteps = 2000;
@@ -88,6 +104,12 @@ namespace Puckmite.View
         private SpriteRenderer[] _turnRings; // highlight behind the current actor's stones
         private readonly List<int> _settleIds = new List<int>(); // reused: current actor's stone ids to settle
 
+        // Top character row (design doc 2.2): one stat text per actor. Each actor's buff is a snapshot taken
+        // when its own turn ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
+        private TextMeshPro[] _characterStatTexts; // indexed by actor
+        private int[] _actorBuffAttack;            // actor -> attack buff snapshot (0 = base only)
+        private int[] _actorBuffShield;            // actor -> shield buff snapshot
+
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
         private int _destroyedTotal;
@@ -121,12 +143,14 @@ namespace Puckmite.View
             DriveSimulation();
             if (_hasRolledThisTurn && _sim.AllAtRest())
             {
+                CaptureActorBuff(_currentActor); // turn end: lock in this actor's buff (design doc 3.5 step 3)
                 AdvanceTurn();
             }
 
             UpdatePuckTransforms();
             UpdateCellHighlights();
             UpdateTurnHighlights();
+            UpdateCharacterStats();
         }
 
         // Builds (or rebuilds) everything this component owns. Destroys any children a previous build left
@@ -145,11 +169,13 @@ namespace Puckmite.View
             BuildCellHighlights();
             BuildPuckViews();
             BuildTurnRings();
+            BuildCharacters();
             BuildAimLine();
             BuildPreviewLine();
             BuildPreviewMarker();
             StartTurn();
             UpdatePuckTransforms();
+            UpdateCharacterStats();
         }
 
         // --- Simulation ---------------------------------------------------------------------------
@@ -262,6 +288,7 @@ namespace Puckmite.View
         {
             BuildSimFrom(InitialLayout());
             AssignActors();
+            ResetActorBuffs();
             _accumulator = 0f;
             _wallBounceTotal = 0;
             _collisionTotal = 0;
@@ -305,6 +332,7 @@ namespace Puckmite.View
             _hasRolledThisTurn = false;
             for (int step = 0; step < _actorCount; step++)
             {
+                ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                 if (ActorHasLiveStones(_currentActor))
                 {
                     SettleCurrentActor();
@@ -478,15 +506,22 @@ namespace Puckmite.View
             }
 
             _camera.orthographic = true;
-            _camera.transform.position = new Vector3(0f, 0f, -10f);
             _camera.transform.rotation = Quaternion.identity;
             _camera.clearFlags = CameraClearFlags.SolidColor;
             _camera.backgroundColor = new Color(0.07f, 0.08f, 0.10f);
 
-            // Frame the whole board with a margin, and make sure it fits horizontally too.
-            float margin = 1.12f;
+            // Frame the board plus the character row above it (design doc 2.2: characters on top, board below),
+            // making sure the board still fits horizontally. The board ends up below screen centre as a result.
+            const float contentTop = CharRowTop;
+            const float contentBottom = -BoardHalf;
+            float centerY = (contentTop + contentBottom) * 0.5f;
+            _camera.transform.position = new Vector3(0f, centerY, -10f);
+
+            float margin = 1.08f;
             float aspect = Mathf.Max(0.0001f, _camera.aspect);
-            _camera.orthographicSize = Mathf.Max(BoardHalf * margin, BoardHalf * margin / aspect);
+            float halfHeight = (contentTop - contentBottom) * 0.5f * margin;
+            float halfWidth = BoardHalf * margin;
+            _camera.orthographicSize = Mathf.Max(halfHeight, halfWidth / aspect);
         }
 
         private void BuildBoard()
@@ -497,7 +532,18 @@ namespace Puckmite.View
             float full = BoardHalf * 2f;
 
             MakeQuad("Background", board, Vector2.zero, new Vector2(full, full), new Color(0.16f, 0.17f, 0.20f), 0);
-            MakeQuad("InnerZone", board, Vector2.zero, new Vector2(InnerHalf * 2f, InnerHalf * 2f), new Color(0.22f, 0.27f, 0.36f), 1);
+            // Inner 3x3 buff cells, coloured by kind (attack/shield) and brighter toward the stronger centre.
+            Vector2 boardMin = new Vector2(-BoardHalf, -BoardHalf);
+            Vector2 boardMax = new Vector2(BoardHalf, BoardHalf);
+            Vector2 buffCellSize = BoardCells.CellSize(boardMin, boardMax);
+            for (int row = 1; row <= 3; row++)
+            {
+                for (int col = 1; col <= 3; col++)
+                {
+                    Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
+                    MakeQuad("BuffCell", board, center, buffCellSize, BuffCellColor(col, row), 1);
+                }
+            }
 
             // Internal cell boundaries (the outermost boundaries are the walls, drawn below).
             float[] gridLines = { -InnerHalf, -2.5f, 2.5f, InnerHalf };
@@ -529,6 +575,18 @@ namespace Puckmite.View
             sr.color = color;
             sr.sortingOrder = sortingOrder;
             return sr;
+        }
+
+        // Placeholder buff-cell tint: attack cells warm, shield cells cool, brighter at the stronger centre.
+        private static Color BuffCellColor(int col, int row)
+        {
+            bool strong = BoardCells.BuffValue(col, row) >= 2; // centre grants 2, other inner cells 1
+            if (BoardCells.KindOf(col, row) == BuffKind.Attack)
+            {
+                return strong ? new Color(0.46f, 0.30f, 0.16f) : new Color(0.34f, 0.24f, 0.16f);
+            }
+
+            return strong ? new Color(0.18f, 0.34f, 0.42f) : new Color(0.16f, 0.26f, 0.32f);
         }
 
         private void BuildPuckViews()
@@ -689,6 +747,70 @@ namespace Puckmite.View
             }
         }
 
+        // Builds the top character row: one placeholder widget per actor (design doc 2.2) — a body circle in
+        // the team colour with a name + stat block below it that UpdateCharacterStats refreshes.
+        private void BuildCharacters()
+        {
+            _characterStatTexts = new TextMeshPro[_actorCount];
+            _actorBuffAttack = new int[_actorCount];
+            _actorBuffShield = new int[_actorCount];
+
+            for (int actor = 0; actor < _actorCount; actor++)
+            {
+                float x = CharacterX(actor);
+
+                GameObject root = new GameObject($"Character{actor}");
+                root.transform.SetParent(transform, false);
+
+                GameObject bodyGo = new GameObject("Body");
+                bodyGo.transform.SetParent(root.transform, false);
+                float diameter = CharBodyRadius * 2f;
+                bodyGo.transform.localPosition = new Vector3(x, CharBodyY, 0f);
+                bodyGo.transform.localScale = new Vector3(diameter, diameter, 1f);
+                SpriteRenderer body = bodyGo.AddComponent<SpriteRenderer>();
+                body.sprite = ProceduralSprites.Circle();
+                body.color = ActorColor(actor);
+                body.sortingOrder = 10;
+
+                _characterStatTexts[actor] = MakeCharacterText(root.transform, "Stats", x, CharBodyY + CharStatOffset, CharBodyRadius * 3.6f, CharStatHeight);
+            }
+        }
+
+        // A world-space TMP that auto-sizes into the given box (placeholder to restyle later, like the level text).
+        private static TextMeshPro MakeCharacterText(Transform parent, string name, float x, float y, float width, float height)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = new Vector3(x, y, 0f);
+
+            TextMeshPro tmp = go.AddComponent<TextMeshPro>();
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 1f;
+            tmp.fontSizeMax = 8f;
+            tmp.rectTransform.sizeDelta = new Vector2(width, height);
+            tmp.color = Color.white;
+            tmp.GetComponent<MeshRenderer>().sortingOrder = 12;
+            return tmp;
+        }
+
+        // Spreads the actors evenly across the top, player leftmost.
+        private float CharacterX(int actor)
+        {
+            if (_actorCount <= 1)
+            {
+                return 0f;
+            }
+
+            float t = (float)actor / (_actorCount - 1);
+            return Mathf.Lerp(-CharSpread, CharSpread, t);
+        }
+
+        private static Color ActorColor(int actor)
+        {
+            return actor == 0 ? OwnerColor(PuckOwner.Player) : OwnerColor(PuckOwner.Enemy);
+        }
+
         // Shows a ring behind each stone belonging to the actor whose turn it is, so the player knows which
         // stones are rollable (the three enemies are all red, so colour alone is not enough).
         private void UpdateTurnHighlights()
@@ -714,6 +836,102 @@ namespace Puckmite.View
                 ring.transform.localScale = new Vector3(d, d, 1f);
                 ring.enabled = true;
             }
+        }
+
+        // Writes each actor's character row: bold name, base HP, and attack/shield as base plus the buff
+        // snapshot locked in at that actor's last turn end (design doc 3.6 — held until its next turn).
+        private void UpdateCharacterStats()
+        {
+            if (_characterStatTexts == null)
+            {
+                return;
+            }
+
+            for (int actor = 0; actor < _actorCount; actor++)
+            {
+                string attack = FormatStat(BaseAttack(actor), _actorBuffAttack[actor]);
+                string shield = FormatStat(BaseShield(actor), _actorBuffShield[actor]);
+                _characterStatTexts[actor].text = $"<b>{ActorName(actor)}</b>\nHP {BaseHealth(actor)}\nATK {attack}\nSHD {shield}";
+            }
+        }
+
+        // Base value, plus the bonus in parentheses when buffed, so the turn-end gain is visible (e.g. "6 (+4)").
+        private static string FormatStat(int baseValue, int buff)
+        {
+            return buff > 0 ? $"{baseValue + buff} (+{buff})" : baseValue.ToString();
+        }
+
+        // Turn end (design doc 3.5 step 3): lock in the actor's buff from the cells its stones occupy, each
+        // cell's value multiplied by that stone's level (design doc 3.7 growth). Held until its next turn.
+        private void CaptureActorBuff(int actor)
+        {
+            if (_actorBuffAttack == null)
+            {
+                return;
+            }
+
+            int attack = 0;
+            int shield = 0;
+            Vector2 boardMin = _sim.BoardMin;
+            Vector2 boardMax = _sim.BoardMax;
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                Puck p = pucks[i];
+                if (_actorOf[p.Id] != actor)
+                {
+                    continue;
+                }
+
+                BoardCells.SumBuffs(boardMin, boardMax, p.Position, p.Radius, _occupancyThreshold, out int a, out int s);
+                attack += a * p.Level;
+                shield += s * p.Level;
+            }
+
+            _actorBuffAttack[actor] = attack;
+            _actorBuffShield[actor] = shield;
+        }
+
+        // Turn start (design doc 3.6): the actor's buff resets, leaving base stats only until it rolls again.
+        private void ClearActorBuff(int actor)
+        {
+            if (_actorBuffAttack == null)
+            {
+                return;
+            }
+
+            _actorBuffAttack[actor] = 0;
+            _actorBuffShield[actor] = 0;
+        }
+
+        // Clears every actor's buff snapshot (a full reset returns the whole row to base stats).
+        private void ResetActorBuffs()
+        {
+            if (_actorBuffAttack == null)
+            {
+                return;
+            }
+
+            for (int actor = 0; actor < _actorCount; actor++)
+            {
+                _actorBuffAttack[actor] = 0;
+                _actorBuffShield[actor] = 0;
+            }
+        }
+
+        private int BaseHealth(int actor)
+        {
+            return actor == 0 ? _playerBaseHealth : _enemyBaseHealth;
+        }
+
+        private int BaseAttack(int actor)
+        {
+            return actor == 0 ? _playerBaseAttack : _enemyBaseAttack;
+        }
+
+        private int BaseShield(int actor)
+        {
+            return actor == 0 ? _playerBaseShield : _enemyBaseShield;
         }
 
         // Overlays each cell a puck currently occupies with a translucent quad in the owner's colour,
