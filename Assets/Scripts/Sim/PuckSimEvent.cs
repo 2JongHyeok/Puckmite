@@ -5,6 +5,7 @@ namespace Puckmite.Sim
     {
         WallBounce,
         PuckCollision,
+        PuckDestroyed,
     }
 
     /// <summary>
@@ -18,7 +19,7 @@ namespace Puckmite.Sim
     {
         public readonly PuckSimEventType Type;
 
-        /// <summary>WallBounce: the bouncing puck's Id. PuckCollision: the first puck's Id.</summary>
+        /// <summary>WallBounce: the bouncing puck's Id. PuckCollision: the first puck's Id. PuckDestroyed: the destroyed puck's Id.</summary>
         public readonly int PuckA;
 
         /// <summary>PuckCollision: the second puck's Id. Unused (-1) for WallBounce.</summary>
@@ -43,6 +44,11 @@ namespace Puckmite.Sim
         public static PuckSimEvent PuckCollision(int a, int b, float impulse)
         {
             return new PuckSimEvent(PuckSimEventType.PuckCollision, a, b, impulse);
+        }
+
+        public static PuckSimEvent PuckDestroyed(int puckId)
+        {
+            return new PuckSimEvent(PuckSimEventType.PuckDestroyed, puckId, -1, 0f);
         }
     }
 }

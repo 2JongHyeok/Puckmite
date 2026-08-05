@@ -39,6 +39,9 @@ namespace Puckmite.Sim
                 WallDampingCheck(),
                 ImpactDampingCheck(),
                 RemovePuckCheck(),
+                CrossTeamDamageCheck(),
+                DestructionCheck(),
+                SetHealthCheck(),
             };
         }
 
@@ -418,6 +421,92 @@ namespace Puckmite.Sim
             return new CheckResult("RemovePuck", passed, detail);
         }
 
+        /// <summary>Cross-team collisions cost each puck 1 health; same-team collisions cost none (design doc 3.3).</summary>
+        public static CheckResult CrossTeamDamageCheck()
+        {
+            PuckSim cross = new PuckSim(new Vector2(-50f, -10f), new Vector2(50f, 10f), 0f, 1f, 0f);
+            cross.AddPuck(new Puck(0, new Vector2(-5f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(10f, 0f), Health = 5 });
+            cross.AddPuck(new Puck(1, new Vector2(5f, 0f), 0.5f, 1f, PuckOwner.Enemy) { Health = 5 });
+            StepUntilPuckCollision(cross);
+            cross.TryGetPuck(0, out Puck c0);
+            cross.TryGetPuck(1, out Puck c1);
+            bool crossOk = c0.Health == 4 && c1.Health == 4;
+
+            PuckSim same = new PuckSim(new Vector2(-50f, -10f), new Vector2(50f, 10f), 0f, 1f, 0f);
+            same.AddPuck(new Puck(0, new Vector2(-5f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(10f, 0f), Health = 5 });
+            same.AddPuck(new Puck(1, new Vector2(5f, 0f), 0.5f, 1f, PuckOwner.Player) { Health = 5 });
+            StepUntilPuckCollision(same);
+            same.TryGetPuck(0, out Puck s0);
+            same.TryGetPuck(1, out Puck s1);
+            bool sameOk = s0.Health == 5 && s1.Health == 5;
+
+            bool passed = crossOk && sameOk;
+            string detail = $"cross-team: {c0.Health}&{c1.Health} (expect 4&4); same-team: {s0.Health}&{s1.Health} (expect 5&5).";
+            return new CheckResult("Cross-team damage", passed, detail);
+        }
+
+        /// <summary>A puck at 0 health is destroyed after the step, but that step's collision physics still applies (3.3 / 7.2).</summary>
+        public static CheckResult DestructionCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-50f, -10f), new Vector2(50f, 10f), 0f, 1f, 0f);
+            sim.AddPuck(new Puck(0, new Vector2(-5f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(10f, 0f), Health = 1 });
+            sim.AddPuck(new Puck(1, new Vector2(5f, 0f), 0.5f, 1f, PuckOwner.Enemy) { Health = 5 });
+
+            bool destroyedEvent = false;
+            for (int step = 0; step < 400 && !destroyedEvent; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.PuckDestroyed && events[i].PuckA == 0)
+                    {
+                        destroyedEvent = true;
+                    }
+                }
+            }
+
+            bool gone = !sim.TryGetPuck(0, out _);
+            sim.TryGetPuck(1, out Puck survivor);
+            bool survivorHit = survivor.Health == 4 && survivor.Velocity != Vector2.zero;
+
+            bool passed = destroyedEvent && gone && survivorHit;
+            string detail =
+                $"destroyed event={destroyedEvent}, puck0 gone={gone}, survivor health={survivor.Health} (expect 4), survivor moving={survivor.Velocity != Vector2.zero}.";
+            return new CheckResult("Destruction", passed, detail);
+        }
+
+        /// <summary>SetHealth changes the target puck's health and leaves others untouched.</summary>
+        public static CheckResult SetHealthCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-10f, -10f), new Vector2(10f, 10f), 3f, 0.9f, 0.01f);
+            sim.AddPuck(new Puck(0, new Vector2(-3f, 0f), 0.5f, 1f, PuckOwner.Player) { Health = 5 });
+            sim.AddPuck(new Puck(1, new Vector2(3f, 0f), 0.5f, 1f, PuckOwner.Enemy) { Health = 5 });
+
+            bool set = sim.SetHealth(0, 2);
+            sim.TryGetPuck(0, out Puck a);
+            sim.TryGetPuck(1, out Puck b);
+            bool missingReturnsFalse = !sim.SetHealth(99, 3);
+
+            bool passed = set && a.Health == 2 && b.Health == 5 && missingReturnsFalse;
+            string detail = $"set={set}, id0 health={a.Health} (expect 2), id1 health={b.Health} (expect 5), missing->false={missingReturnsFalse}.";
+            return new CheckResult("SetHealth", passed, detail);
+        }
+
+        private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)
+        {
+            for (int step = 0; step < maxSteps; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.PuckCollision)
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
         private static List<PuckSimEvent> RunToRestCollecting(PuckSim sim, int maxSteps = 100000)
         {
             List<PuckSimEvent> collected = new List<PuckSimEvent>();
@@ -457,7 +546,8 @@ namespace Puckmite.Sim
                 bool same =
                     ExactlyEqual(x.Position, y.Position) &&
                     ExactlyEqual(x.Velocity, y.Velocity) &&
-                    x.BounceCount == y.BounceCount;
+                    x.BounceCount == y.BounceCount &&
+                    x.Health == y.Health;
                 if (!same)
                 {
                     difference =
@@ -515,7 +605,8 @@ namespace Puckmite.Sim
                     x.Radius == y.Radius &&
                     x.Mass == y.Mass &&
                     x.Owner == y.Owner &&
-                    x.BounceCount == y.BounceCount;
+                    x.BounceCount == y.BounceCount &&
+                    x.Health == y.Health;
 
                 if (!same)
                 {

@@ -39,6 +39,9 @@ namespace Puckmite.Sim
         // depend on the (unstable) list order. Rebuilt each Step().
         private readonly List<int> _order = new List<int>();
 
+        // Reused buffer of puck Ids destroyed this step (health <= 0), removed at the end of Step().
+        private readonly List<int> _dead = new List<int>();
+
         public PuckSim(Vector2 boardMin, Vector2 boardMax, PuckSimConfig config)
         {
             _pucks = new List<Puck>();
@@ -115,6 +118,21 @@ namespace Puckmite.Sim
             return true;
         }
 
+        /// <summary>Sets the health of the puck with the given Id. Returns false if not found.</summary>
+        public bool SetHealth(int id, int health)
+        {
+            int index = IndexOf(id);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            Puck p = _pucks[index];
+            p.Health = health;
+            _pucks[index] = p;
+            return true;
+        }
+
         /// <summary>
         /// Advances the whole simulation by one fixed timestep and returns the events that occurred
         /// during it (wall bounces, puck-to-puck impacts). The returned list is a buffer reused by the
@@ -164,6 +182,8 @@ namespace Puckmite.Sim
                     _pucks[index] = p;
                 }
             }
+
+            RemoveDeadPucks();
 
             return _events;
         }
@@ -302,6 +322,33 @@ namespace Puckmite.Sim
             }
         }
 
+        // Removes pucks whose health has dropped to 0 or below, emitting a PuckDestroyed event for each.
+        // Processed in ascending Id order for determinism. Called after collisions and walls so the fatal
+        // hit's physics is already applied this step (design doc 3.3 / 7.2).
+        private void RemoveDeadPucks()
+        {
+            _dead.Clear();
+            for (int i = 0; i < _pucks.Count; i++)
+            {
+                if (_pucks[i].Health <= 0)
+                {
+                    _dead.Add(_pucks[i].Id);
+                }
+            }
+
+            if (_dead.Count == 0)
+            {
+                return;
+            }
+
+            _dead.Sort();
+            for (int i = 0; i < _dead.Count; i++)
+            {
+                _events.Add(PuckSimEvent.PuckDestroyed(_dead[i]));
+                RemovePuck(_dead[i]);
+            }
+        }
+
         // Constant deceleration: cut a fixed amount off the speed each step, then snap to rest once
         // the speed drops to the threshold. Direction is preserved.
         private void ApplyFriction(ref Puck p)
@@ -425,6 +472,15 @@ namespace Puckmite.Sim
                 // branch only runs when the pucks are approaching).
                 a.Velocity *= _collisionSpeedKept;
                 b.Velocity *= _collisionSpeedKept;
+
+                // Cross-team impact costs each puck 1 health (design doc 3.3). Same-team collisions deal no
+                // damage (they yield XP instead — not yet implemented). Destruction is deferred to the end
+                // of the step so this step's collision physics is fully applied first (3.3 / 7.2).
+                if (a.Owner != b.Owner)
+                {
+                    a.Health--;
+                    b.Health--;
+                }
 
                 _events.Add(PuckSimEvent.PuckCollision(a.Id, b.Id, impulseMagnitude));
             }
