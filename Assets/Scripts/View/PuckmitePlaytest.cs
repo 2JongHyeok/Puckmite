@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Puckmite.Sim;
+using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering.Universal;
@@ -55,6 +56,16 @@ namespace Puckmite.View
         private SpriteRenderer[] _puckViews; // indexed by puck Id (layout uses contiguous Ids from 0)
         private LineRenderer[][] _healthArcs; // [puckId][arc]: health shown as arc segments around the rim
         private Material _arcMaterial;        // shared by every health arc
+        private TextMeshPro[] _levelTexts;      // [puckId]: level number (world-space TMP; a placeholder to restyle later)
+        private MeshRenderer[] _levelRenderers; // [puckId]: the level text's renderer, toggled for show/hide
+        private MeshRenderer[] _xpFillRenderers; // [puckId]: XP fill renderer (circle-segment mesh)
+        private Mesh[] _xpFillMeshes;            // [puckId]: the fill mesh, regenerated when fraction changes
+        private float[] _xpFillFraction;         // [puckId]: last drawn fraction (-1 = none yet)
+
+        // Reused buffers for building the XP fill mesh (one puck at a time, no per-frame allocation).
+        private static readonly List<Vector3> _fillVerts = new List<Vector3>();
+        private static readonly List<int> _fillTris = new List<int>();
+        private static readonly List<Color> _fillColors = new List<Color>();
         private SpriteRenderer[] _cellHighlights;                    // pool of occupied-cell overlays
         private readonly List<int> _occupiedCells = new List<int>(); // reused per puck each frame
         private SpriteRenderer _aimLine;
@@ -410,6 +421,11 @@ namespace Puckmite.View
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             _puckViews = new SpriteRenderer[pucks.Count];
             _healthArcs = new LineRenderer[pucks.Count][];
+            _levelTexts = new TextMeshPro[pucks.Count];
+            _levelRenderers = new MeshRenderer[pucks.Count];
+            _xpFillRenderers = new MeshRenderer[pucks.Count];
+            _xpFillMeshes = new Mesh[pucks.Count];
+            _xpFillFraction = new float[pucks.Count];
             for (int i = 0; i < pucks.Count; i++)
             {
                 Puck p = pucks[i];
@@ -421,6 +437,36 @@ namespace Puckmite.View
                 sr.color = OwnerColor(p.Owner);
                 sr.sortingOrder = 10;
                 _puckViews[p.Id] = sr;
+
+                // Level number: world-space TMP that auto-sizes into a puck-sized box (placeholder to restyle later).
+                GameObject levelGo = new GameObject($"Puck{p.Id}_Level");
+                levelGo.transform.SetParent(transform, false);
+                TextMeshPro tmp = levelGo.AddComponent<TextMeshPro>();
+                tmp.alignment = TextAlignmentOptions.Center;
+                tmp.enableAutoSizing = true;
+                tmp.fontSizeMin = 1f;
+                tmp.fontSizeMax = 300f;
+                tmp.rectTransform.sizeDelta = new Vector2(p.Radius * 1.3f, p.Radius * 1.5f);
+                tmp.color = Color.white;
+                MeshRenderer levelMr = levelGo.GetComponent<MeshRenderer>();
+                levelMr.sortingOrder = 12; // above the puck circle and arcs
+                levelMr.enabled = false;
+                _levelTexts[p.Id] = tmp;
+                _levelRenderers[p.Id] = levelMr;
+
+                // XP fill: circle-segment mesh that fills like liquid, clipped to the circle. Regenerated
+                // only when the fraction changes; the object just follows the puck.
+                GameObject fillGo = new GameObject($"Puck{p.Id}_XpFill");
+                fillGo.transform.SetParent(transform, false);
+                MeshRenderer fillMr = fillGo.AddComponent<MeshRenderer>();
+                fillMr.sharedMaterial = _arcMaterial; // Sprites/Default; the mesh carries the green vertex colours
+                fillMr.sortingOrder = 11;             // above the puck circle, below the level number
+                fillMr.enabled = false;
+                Mesh fillMesh = new Mesh { name = $"XpFill{p.Id}" };
+                fillGo.AddComponent<MeshFilter>().sharedMesh = fillMesh;
+                _xpFillRenderers[p.Id] = fillMr;
+                _xpFillMeshes[p.Id] = fillMesh;
+                _xpFillFraction[p.Id] = -1f;
 
                 LineRenderer[] arcs = new LineRenderer[MaxHealthArcs];
                 for (int a = 0; a < MaxHealthArcs; a++)
@@ -556,6 +602,8 @@ namespace Puckmite.View
             for (int id = 0; id < _puckViews.Length; id++)
             {
                 _puckViews[id].enabled = false;
+                _levelRenderers[id].enabled = false;
+                _xpFillRenderers[id].enabled = false;
                 LineRenderer[] arcs = _healthArcs[id];
                 for (int a = 0; a < arcs.Length; a++)
                 {
@@ -574,7 +622,78 @@ namespace Puckmite.View
                 sr.transform.localScale = new Vector3(diameter, diameter, 1f);
 
                 DrawHealthArcs(p);
+                DrawLevelAndXp(p);
             }
+        }
+
+        // Level number at the puck centre, and the XP progress as a fill rising from the bottom (design doc 6.3).
+        private void DrawLevelAndXp(Puck p)
+        {
+            _levelTexts[p.Id].text = p.Level.ToString();
+            _levelTexts[p.Id].transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+            _levelRenderers[p.Id].enabled = true;
+
+            MeshRenderer fill = _xpFillRenderers[p.Id];
+            fill.transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+
+            float fraction = (float)p.Xp / PuckSim.XpPerLevel;
+            if (fraction <= 0f)
+            {
+                fill.enabled = false;
+                return;
+            }
+
+            // Fill radius stays inside the health-arc ring (0.9 * radius) so the arcs are not covered.
+            if (_xpFillFraction[p.Id] != fraction)
+            {
+                BuildXpFillMesh(_xpFillMeshes[p.Id], p.Radius * 0.8f, fraction);
+                _xpFillFraction[p.Id] = fraction;
+            }
+
+            fill.enabled = true;
+        }
+
+        // Builds the "liquid in a circle" fill: the part of a circle (radius r) below a water line set by
+        // fraction, in local space (centred on origin). The segment is convex, so a triangle fan works;
+        // Sprites/Default renders both faces, so winding does not matter.
+        private static void BuildXpFillMesh(Mesh mesh, float r, float fraction)
+        {
+            _fillVerts.Clear();
+            _fillTris.Clear();
+            _fillColors.Clear();
+
+            fraction = Mathf.Clamp01(fraction);
+            float waterY = -r + 2f * r * fraction;
+            float half = Mathf.Sqrt(Mathf.Max(0f, r * r - waterY * waterY));
+
+            float start = Mathf.Atan2(waterY, half);   // right intersection
+            float end = Mathf.Atan2(waterY, -half);    // left intersection
+            if (end > start)
+            {
+                end -= 2f * Mathf.PI; // sweep clockwise through the bottom so end sits below start
+            }
+
+            int segments = Mathf.Clamp(Mathf.CeilToInt((start - end) / (12f * Mathf.Deg2Rad)), 1, 48);
+
+            Color color = new Color(0.45f, 1f, 0.5f, 0.85f);
+            for (int i = 0; i <= segments; i++)
+            {
+                float a = Mathf.Lerp(start, end, (float)i / segments);
+                _fillVerts.Add(new Vector3(Mathf.Cos(a) * r, Mathf.Sin(a) * r, 0f));
+                _fillColors.Add(color);
+            }
+
+            for (int i = 1; i < _fillVerts.Count - 1; i++)
+            {
+                _fillTris.Add(0);
+                _fillTris.Add(i);
+                _fillTris.Add(i + 1);
+            }
+
+            mesh.Clear();
+            mesh.SetVertices(_fillVerts);
+            mesh.SetColors(_fillColors);
+            mesh.SetTriangles(_fillTris, 0);
         }
 
         // Draws the puck's health as arc segments around its rim: the rim is split into (max health) slices
