@@ -46,6 +46,7 @@ namespace Puckmite.Sim
                 CellTypeCheck(),
                 XpGainCheck(),
                 LevelCapCheck(),
+                SettleDamageCellsCheck(),
             };
         }
 
@@ -607,6 +608,39 @@ namespace Puckmite.Sim
             bool passed = bounces >= 12 && p.Level == 5 && p.Xp == 0;
             string detail = $"bounces={bounces} (need >=12), level={p.Level} (expect 5), xp={p.Xp} (expect 0).";
             return new CheckResult("Level cap", passed, detail);
+        }
+
+        /// <summary>Damage-cell settlement: −(damage × occupied damage cells), buff cells cost nothing, 0 health destroys, only listed pucks (design doc 3.4).</summary>
+        public static CheckResult SettleDamageCellsCheck()
+        {
+            Vector2 min = new Vector2(-12.5f, -12.5f);
+            Vector2 max = new Vector2(12.5f, 12.5f);
+            const float threshold = 0.3f;
+
+            PuckSim sim = new PuckSim(min, max, 3f, 0.9f, 0.01f);
+            sim.AddPuck(new Puck(0, new Vector2(-9f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5 });    // 1 damage cell
+            sim.AddPuck(new Puck(1, new Vector2(0f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5 });     // centre = buff
+            sim.AddPuck(new Puck(2, new Vector2(7.5f, 7.5f), 1.5f, 1f, PuckOwner.Player) { Health = 10 }); // 3 damage cells (cross-point)
+            sim.AddPuck(new Puck(3, new Vector2(-9f, 6f), 1.5f, 1f, PuckOwner.Enemy) { Health = 2 });     // 1 damage cell, dies
+            sim.AddPuck(new Puck(4, new Vector2(-9f, -6f), 1.5f, 1f, PuckOwner.Player) { Health = 5 });   // 1 damage cell, left unsettled
+
+            sim.SettleDamageCells(new List<int> { 0, 1, 2, 3 }, 2, threshold);
+
+            sim.TryGetPuck(0, out Puck p0);
+            sim.TryGetPuck(1, out Puck p1);
+            sim.TryGetPuck(2, out Puck p2);
+            bool deadGone = !sim.TryGetPuck(3, out _);
+            sim.TryGetPuck(4, out Puck p4);
+
+            bool oneCell = p0.Health == 3;    // 5 - 1*2
+            bool buffCell = p1.Health == 5;   // no damage on a buff cell
+            bool threeCells = p2.Health == 4; // 10 - 3*2
+            bool notSettled = p4.Health == 5; // outside the list
+
+            bool passed = oneCell && buffCell && threeCells && deadGone && notSettled;
+            string detail =
+                $"1cell={p0.Health}(exp3), buff={p1.Health}(exp5), 3cell={p2.Health}(exp4), destroyed={deadGone}, unsettled={p4.Health}(exp5).";
+            return new CheckResult("Damage cell settlement", passed, detail);
         }
 
         private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)

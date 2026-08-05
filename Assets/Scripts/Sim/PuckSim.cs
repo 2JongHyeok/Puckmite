@@ -46,6 +46,10 @@ namespace Puckmite.Sim
         // Reused buffer of puck Ids destroyed this step (health <= 0), removed at the end of Step().
         private readonly List<int> _dead = new List<int>();
 
+        // Reused buffers for damage-cell settlement (a puck's occupied cells, and the pucks it destroys).
+        private readonly List<int> _settleCells = new List<int>();
+        private readonly List<int> _settleDead = new List<int>();
+
         public PuckSim(Vector2 boardMin, Vector2 boardMax, PuckSimConfig config)
         {
             _pucks = new List<Puck>();
@@ -91,6 +95,58 @@ namespace Puckmite.Sim
 
             _pucks.RemoveAt(index);
             return true;
+        }
+
+        /// <summary>
+        /// One round of damage-cell settlement (design doc 3.4 / 3.5): each given puck loses
+        /// <paramref name="damagePerCell"/> for every damage cell it occupies, then any at 0 health are
+        /// destroyed. The caller chooses which pucks (e.g. one actor's stones at its turn start).
+        /// </summary>
+        public void SettleDamageCells(IReadOnlyList<int> puckIds, int damagePerCell, float threshold)
+        {
+            for (int i = 0; i < puckIds.Count; i++)
+            {
+                int index = IndexOf(puckIds[i]);
+                if (index < 0)
+                {
+                    continue;
+                }
+
+                Puck p = _pucks[index];
+                BoardCells.GetOccupiedCells(_boardMin, _boardMax, p.Position, p.Radius, threshold, _settleCells);
+
+                int damageCells = 0;
+                for (int c = 0; c < _settleCells.Count; c++)
+                {
+                    int cell = _settleCells[c];
+                    if (BoardCells.TypeOf(cell % BoardCells.Size, cell / BoardCells.Size) == CellType.Damage)
+                    {
+                        damageCells++;
+                    }
+                }
+
+                if (damageCells > 0)
+                {
+                    p.Health -= damageCells * damagePerCell;
+                    _pucks[index] = p;
+                }
+            }
+
+            // Destroy the settled pucks that hit 0 health, in Id order for determinism.
+            _settleDead.Clear();
+            for (int i = 0; i < puckIds.Count; i++)
+            {
+                if (TryGetPuck(puckIds[i], out Puck p) && p.Health <= 0)
+                {
+                    _settleDead.Add(puckIds[i]);
+                }
+            }
+
+            _settleDead.Sort();
+            for (int i = 0; i < _settleDead.Count; i++)
+            {
+                RemovePuck(_settleDead[i]);
+            }
         }
 
         /// <summary>Finds a puck by Id. Returns false if no puck has that Id.</summary>
