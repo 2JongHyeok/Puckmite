@@ -49,7 +49,7 @@ namespace Puckmite.View
         // Cell-occupancy highlights: pool cap (6 pucks * up to 4 cells, with margin).
         private const int MaxCellHighlights = 30;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 640f);
+        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 660f);
 
         private PuckSim _sim;
         private Camera _camera;
@@ -78,6 +78,13 @@ namespace Puckmite.View
         private bool _aiming;
         private int _aimingPuckId = -1;
         private float _currentPowerFraction;
+
+        // Turn structure (view-only orchestration; the sim stays pure physics/combat).
+        private int[] _actorOf;              // puck id -> actor (0 = player, 1.. = each enemy)
+        private int _actorCount;
+        private int _currentActor;
+        private bool _hasRolledThisTurn;
+        private SpriteRenderer[] _turnRings; // highlight behind the current actor's stones
 
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
@@ -110,8 +117,14 @@ namespace Puckmite.View
             ApplyHealthChangeIfNeeded();
             HandleInput();
             DriveSimulation();
+            if (_hasRolledThisTurn && _sim.AllAtRest())
+            {
+                AdvanceTurn();
+            }
+
             UpdatePuckTransforms();
             UpdateCellHighlights();
+            UpdateTurnHighlights();
         }
 
         // Builds (or rebuilds) everything this component owns. Destroys any children a previous build left
@@ -124,10 +137,12 @@ namespace Puckmite.View
             }
 
             BuildSimFrom(InitialLayout());
+            AssignActors();
             BuildCamera();
             BuildBoard();
             BuildCellHighlights();
             BuildPuckViews();
+            BuildTurnRings();
             BuildAimLine();
             BuildPreviewLine();
             BuildPreviewMarker();
@@ -243,11 +258,74 @@ namespace Puckmite.View
         private void ResetPucks()
         {
             BuildSimFrom(InitialLayout());
+            AssignActors();
             _accumulator = 0f;
             _wallBounceTotal = 0;
             _collisionTotal = 0;
             _destroyedTotal = 0;
             UpdatePuckTransforms();
+        }
+
+        // Assigns each puck to a turn actor from the fixed roster: the player is actor 0 (owns all its
+        // stones); each enemy is its own actor (1, 2, 3, ...). Combat teams (Owner) are unchanged.
+        private void AssignActors()
+        {
+            List<Puck> roster = InitialLayout();
+            int maxId = 0;
+            for (int i = 0; i < roster.Count; i++)
+            {
+                if (roster[i].Id > maxId)
+                {
+                    maxId = roster[i].Id;
+                }
+            }
+
+            _actorOf = new int[maxId + 1];
+            int nextEnemy = 1;
+            for (int i = 0; i < roster.Count; i++)
+            {
+                Puck p = roster[i];
+                _actorOf[p.Id] = p.Owner == PuckOwner.Player ? 0 : nextEnemy++;
+            }
+
+            _actorCount = nextEnemy; // player (0) + enemies (1 .. nextEnemy-1)
+            _currentActor = 0;
+            _hasRolledThisTurn = false;
+        }
+
+        // Passes the turn to the next actor that still has stones on the board (empty actors are skipped —
+        // there is no new-stone entry yet). Design doc 3.5: order tightens up when an actor is out.
+        private void AdvanceTurn()
+        {
+            _hasRolledThisTurn = false;
+            for (int step = 0; step < _actorCount; step++)
+            {
+                _currentActor = (_currentActor + 1) % _actorCount;
+                if (ActorHasLiveStones(_currentActor))
+                {
+                    return;
+                }
+            }
+            // No actor has stones left; leave the current actor as is.
+        }
+
+        private bool ActorHasLiveStones(int actor)
+        {
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if (_actorOf[pucks[i].Id] == actor)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string ActorName(int actor)
+        {
+            return actor == 0 ? "Player" : $"Enemy {actor}";
         }
 
         // --- Input --------------------------------------------------------------------------------
@@ -263,7 +341,7 @@ namespace Puckmite.View
             Vector2 screen = mouse.position.ReadValue();
             Vector2 world = ScreenToWorld(screen);
 
-            if (mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen))
+            if (mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen) && !_hasRolledThisTurn)
             {
                 int id = NearestPuckId(world);
                 if (id >= 0)
@@ -303,6 +381,7 @@ namespace Puckmite.View
                         float power = _maxPower * DragToPowerFraction(drag.magnitude);
                         _sim.SetVelocity(_aimingPuckId, drag.normalized * power);
                         _accumulator = 0f;
+                        _hasRolledThisTurn = true; // one forced roll per turn (design doc 3.5)
                     }
                 }
 
@@ -320,6 +399,11 @@ namespace Puckmite.View
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             for (int i = 0; i < pucks.Count; i++)
             {
+                if (_actorOf[pucks[i].Id] != _currentActor) // only the current actor's own stones
+                {
+                    continue;
+                }
+
                 float sqr = (pucks[i].Position - world).sqrMagnitude;
                 if (sqr <= bestSqr)
                 {
@@ -551,6 +635,51 @@ namespace Puckmite.View
                 sr.sortingOrder = 4; // above board/grid/walls (0..3), below pucks (10)
                 sr.enabled = false;
                 _cellHighlights[i] = sr;
+            }
+        }
+
+        private void BuildTurnRings()
+        {
+            int count = _sim.Pucks.Count;
+            _turnRings = new SpriteRenderer[count];
+            for (int i = 0; i < count; i++)
+            {
+                GameObject go = new GameObject($"TurnRing{i}");
+                go.transform.SetParent(transform, false);
+
+                SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = ProceduralSprites.Circle();
+                sr.color = new Color(1f, 0.9f, 0.25f, 0.9f); // bright ring behind the current actor's stones
+                sr.sortingOrder = 8; // behind the puck (10), above the cell highlights (4)
+                sr.enabled = false;
+                _turnRings[i] = sr;
+            }
+        }
+
+        // Shows a ring behind each stone belonging to the actor whose turn it is, so the player knows which
+        // stones are rollable (the three enemies are all red, so colour alone is not enough).
+        private void UpdateTurnHighlights()
+        {
+            for (int i = 0; i < _turnRings.Length; i++)
+            {
+                _turnRings[i].enabled = false;
+            }
+
+            int next = 0;
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count && next < _turnRings.Length; i++)
+            {
+                Puck p = pucks[i];
+                if (_actorOf[p.Id] != _currentActor)
+                {
+                    continue;
+                }
+
+                SpriteRenderer ring = _turnRings[next++];
+                float d = p.Radius * 2.5f;
+                ring.transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+                ring.transform.localScale = new Vector3(d, d, 1f);
+                ring.enabled = true;
             }
         }
 
@@ -887,6 +1016,7 @@ namespace Puckmite.View
             GUILayout.BeginArea(new Rect(HudRect.x, HudRect.y, HudRect.width, HudRect.height), GUI.skin.box);
 
             GUILayout.Label("Puckmite Playtest");
+            GUILayout.Label($"Turn: {ActorName(_currentActor)}    {(_hasRolledThisTurn ? "(rolling…)" : "roll a highlighted stone")}");
             GUILayout.Label($"Pucks: {_sim.Pucks.Count}    At rest: {_sim.AllAtRest()}");
             GUILayout.Label($"Wall bounces: {_wallBounceTotal}    Collisions: {_collisionTotal}");
             GUILayout.Label($"Destroyed: {_destroyedTotal}");
