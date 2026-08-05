@@ -17,7 +17,7 @@ namespace Puckmite.EditorTools
         [MenuItem("Tools/Puckmite/Create Playtest Object")]
         public static void CreatePlaytestObject()
         {
-            PuckmitePlaytest existing = Object.FindFirstObjectByType<PuckmitePlaytest>();
+            PuckmitePlaytest existing = Object.FindAnyObjectByType<PuckmitePlaytest>();
             GameObject go;
             if (existing != null)
             {

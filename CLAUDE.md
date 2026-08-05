@@ -123,6 +123,7 @@ Unity는 학습 데이터가 따라잡는 속도보다 빠르게 API를 폐기�
 - **패키지 API**: `Library/PackageCache/<pkg>@<hash>/` 소스를 읽는다 — 설치된 정확한 버전이 시그니처·기본값·네임스페이스를 한 번에 확정한다.
 - **엔진 API** (`UnityEngine.*`): 멤버 이름은 `<UnityInstall>/Editor/Data/Managed/UnityEngine/*.dll` 메타데이터에 있다. 단순 문자열 스캔으로 심볼 존재를 확인한다. (`ReflectionOnlyLoadFrom`은 실패한다 — netstandard 파사드가 해석되지 않는다.)
 - 심볼이 존재하는지뿐 아니라 정확한 형태(네임스페이스, 중첩, 전체 시그니처)까지 맞는지 확인한다.
+- **폐기 API는 경고로만 실패한다** (컴파일은 됨). 같은 일을 하는 이름이 둘이면 새 쪽을 쓴다. 확인된 예: `Object.FindFirstObjectByType<T>()`는 이 프로젝트 Unity(6000.5.3f1)에서 폐기(CS0618) → `Object.FindAnyObjectByType<T>()`를 쓴다.
 
 ## Unity — C# 컨벤션
 
