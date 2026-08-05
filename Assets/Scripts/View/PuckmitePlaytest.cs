@@ -68,6 +68,13 @@ namespace Puckmite.View
 
         private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 680f);
 
+        // Highlight rings. Yellow is the default "this is yours to act on", used for the current actor's
+        // stones and, during the attack phase, for the attacker and the target under the cursor; the faint
+        // version marks a target that is merely available. Red marks a stone drawn back far enough to launch.
+        private static readonly Color RingStrong = new Color(1f, 0.9f, 0.25f, 0.9f);
+        private static readonly Color RingFaint = new Color(1f, 0.9f, 0.25f, 0.25f);
+        private static readonly Color RingLaunchReady = new Color(1f, 0.35f, 0.25f, 0.95f);
+
         private PuckSim _sim;
         private Camera _camera;
         private SpriteRenderer[] _puckViews; // indexed by puck Id (layout uses contiguous Ids from 0)
@@ -93,6 +100,7 @@ namespace Puckmite.View
         private float _accumulator;
         private bool _aiming;
         private int _aimingPuckId = -1;
+        private bool _launchReady; // the current drag is long enough to actually fling the aimed stone
         private float _currentPowerFraction;
 
         // Turn structure (view-only orchestration; the sim stays pure physics/combat).
@@ -410,6 +418,7 @@ namespace Puckmite.View
         private void HandleInput()
         {
             _hoveredCharacter = -1; // recomputed below while an attack is pending
+            _launchReady = false;   // recomputed below while aiming
 
             Mouse mouse = Mouse.current;
             if (mouse == null)
@@ -461,10 +470,20 @@ namespace Puckmite.View
                 }
             }
 
+            // Right-click aborts the shot: the stone stays put and the turn's roll is still unspent. Dropping
+            // out of aiming here also stops the coming left-release from firing it.
+            if (_aiming && mouse.rightButton.wasPressedThisFrame)
+            {
+                _aiming = false;
+                _aimingPuckId = -1;
+                HidePreview();
+            }
+
             if (_aiming && _sim.TryGetPuck(_aimingPuckId, out Puck aimPuck))
             {
                 Vector2 drag = PullbackDrag(aimPuck.Position, world);
-                if (drag.magnitude >= MinDrag)
+                _launchReady = drag.magnitude >= MinDrag;
+                if (_launchReady)
                 {
                     _currentPowerFraction = DragToPowerFraction(drag.magnitude);
                     float power = _maxPower * _currentPowerFraction;
@@ -784,7 +803,7 @@ namespace Puckmite.View
 
                 SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
                 sr.sprite = ProceduralSprites.Circle();
-                sr.color = new Color(1f, 0.9f, 0.25f, 0.9f); // bright ring behind the current actor's stones
+                sr.color = RingStrong; // recoloured per frame in UpdateTurnHighlights
                 sr.sortingOrder = 8; // behind the puck (10), above the cell highlights (4)
                 sr.enabled = false;
                 _turnRings[i] = sr;
@@ -820,8 +839,8 @@ namespace Puckmite.View
                 ringGo.transform.localScale = new Vector3(ringDiameter, ringDiameter, 1f);
                 SpriteRenderer ring = ringGo.AddComponent<SpriteRenderer>();
                 ring.sprite = ProceduralSprites.Circle();
-                ring.color = new Color(1f, 0.9f, 0.25f, 0.9f); // matches the stone turn ring
-                ring.sortingOrder = 9;                          // behind the body (10), above the board
+                ring.color = RingStrong;
+                ring.sortingOrder = 9; // behind the body (10), above the board
                 ring.enabled = false;
                 _characterTargetRings[actor] = ring;
 
@@ -876,12 +895,19 @@ namespace Puckmite.View
         }
 
         // Shows a ring behind each stone belonging to the actor whose turn it is, so the player knows which
-        // stones are rollable (the three enemies are all red, so colour alone is not enough).
+        // stones are rollable (the three enemies are all red, so colour alone is not enough). Once the roll
+        // is spent the rings go out — nothing of this actor's is rollable while its stone is still travelling
+        // or while it is picking an attack target.
         private void UpdateTurnHighlights()
         {
             for (int i = 0; i < _turnRings.Length; i++)
             {
                 _turnRings[i].enabled = false;
+            }
+
+            if (_hasRolledThisTurn)
+            {
+                return;
             }
 
             int next = 0;
@@ -898,6 +924,9 @@ namespace Puckmite.View
                 float d = p.Radius * 2.5f;
                 ring.transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
                 ring.transform.localScale = new Vector3(d, d, 1f);
+
+                // Red once the pull-back is past the minimum, so it is obvious when releasing will fire.
+                ring.color = _launchReady && p.Id == _aimingPuckId ? RingLaunchReady : RingStrong;
                 ring.enabled = true;
             }
         }
@@ -928,8 +957,25 @@ namespace Puckmite.View
                     $"<b>{ActorName(actor)}</b>\nHP {_actorHealth[actor]}/{BaseHealth(actor)}\nATK {attack}\nSHD {shield}";
 
                 _characterBodies[actor].color = ActorColor(actor);
-                _characterTargetRings[actor].enabled = actor == _hoveredCharacter;
+                UpdateCharacterRing(actor);
             }
+        }
+
+        // Ring states while the player is picking a target (design doc 3.5 step 4): the attacker is ringed
+        // so it is clear who is acting, every enemy it may hit gets a faint ring, and the one under the
+        // cursor lights up fully. Outside the attack phase no character is ringed.
+        private void UpdateCharacterRing(int actor)
+        {
+            SpriteRenderer ring = _characterTargetRings[actor];
+            if (!_awaitingAttack)
+            {
+                ring.enabled = false;
+                return;
+            }
+
+            bool strong = actor == _currentActor || actor == _hoveredCharacter;
+            ring.color = strong ? RingStrong : RingFaint;
+            ring.enabled = true;
         }
 
         // Base value, plus the bonus in parentheses when buffed, so the turn-end gain is visible (e.g. "6 (+4)").
