@@ -36,6 +36,8 @@ namespace Puckmite.Sim
                 EventEmissionCheck(),
                 TunnelingCheck(),
                 CollisionOrderIndependenceCheck(),
+                WallDampingCheck(),
+                ImpactDampingCheck(),
             };
         }
 
@@ -330,6 +332,69 @@ namespace Puckmite.Sim
 
             return new CheckResult("Collision order independence", true,
                 $"Two list orders gave identical per-Id states and event streams ({eventsA.Count} events).");
+        }
+
+        /// <summary>A wall bounce keeps WallRestitution of the reflected speed. Frictionless, so only the wall changes it.</summary>
+        public static CheckResult WallDampingCheck()
+        {
+            // WallRestitution 0.5: the reflected component should come back at half speed.
+            PuckSim sim = new PuckSim(new Vector2(-20f, -5f), new Vector2(20f, 5f), new PuckSimConfig(0f, 1f, 0f, 0.5f));
+            sim.AddPuck(new Puck(0, new Vector2(0f, 0f), 0.5f, 1f, PuckOwner.Player));
+            sim.SetVelocity(0, new Vector2(10f, 0f)); // straight at the right wall
+
+            float speedAfterBounce = -1f;
+            for (int step = 0; step < 2000; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                bool bounced = false;
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.WallBounce)
+                    {
+                        bounced = true;
+                    }
+                }
+
+                if (bounced)
+                {
+                    sim.TryGetPuck(0, out Puck p);
+                    speedAfterBounce = p.Velocity.magnitude;
+                    break;
+                }
+            }
+
+            bool passed = speedAfterBounce > 0f && Math.Abs(speedAfterBounce - 5f) < 1e-3f;
+            string detail = $"speed after bounce={speedAfterBounce:F4} (expect 10 * 0.5 = 5, frictionless).";
+            return new CheckResult("Wall damping", passed, detail);
+        }
+
+        /// <summary>Impact damping bleeds speed on a puck-puck collision, independent of restitution.</summary>
+        public static CheckResult ImpactDampingCheck()
+        {
+            // Frictionless, elastic bounce (restitution 1) but keep only half the speed on impact.
+            PuckSim sim = new PuckSim(new Vector2(-50f, -10f), new Vector2(50f, 10f),
+                new PuckSimConfig(0f, 1f, 0f, 1f, 0.5f));
+            sim.AddPuck(new Puck(0, new Vector2(-5f, 0f), 0.5f, 1f, PuckOwner.Player) { Velocity = new Vector2(10f, 0f) });
+            sim.AddPuck(new Puck(1, new Vector2(5f, 0f), 0.5f, 1f, PuckOwner.Enemy));
+
+            bool collided = false;
+            for (int step = 0; step < 400 && !collided; step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = sim.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    if (events[i].Type == PuckSimEventType.PuckCollision)
+                    {
+                        collided = true;
+                    }
+                }
+            }
+
+            sim.TryGetPuck(1, out Puck target);
+            // Equal-mass elastic head-on transfers the full 10 to the target; impact damping keeps half.
+            bool passed = collided && Math.Abs(target.Velocity.magnitude - 5f) < 1e-3f;
+            string detail = $"collided={collided}, target speed={target.Velocity.magnitude:F4} (expect 10 * 0.5 = 5).";
+            return new CheckResult("Impact damping", passed, detail);
         }
 
         private static List<PuckSimEvent> RunToRestCollecting(PuckSim sim, int maxSteps = 100000)

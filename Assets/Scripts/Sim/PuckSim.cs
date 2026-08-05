@@ -25,9 +25,11 @@ namespace Puckmite.Sim
         private readonly List<Puck> _pucks;
         private readonly Vector2 _boardMin;
         private readonly Vector2 _boardMax;
-        private readonly float _friction;      // constant deceleration, units/s^2
-        private readonly float _restitution;   // puck-to-puck bounciness, [0, 1]
-        private readonly float _restThreshold; // speed (units/s) at or below which a puck snaps to rest
+        private readonly float _friction;          // constant deceleration, units/s^2
+        private readonly float _restitution;       // puck-to-puck bounciness, [0, 1]
+        private readonly float _restThreshold;     // speed (units/s) at or below which a puck snaps to rest
+        private readonly float _wallRestitution;   // reflected speed kept after a wall bounce, [0, 1]; 1 = no damping
+        private readonly float _collisionSpeedKept; // fraction of both pucks' speed kept after an impact, [0, 1]; 1 = no loss
 
         // Events produced by the current Step(). Allocated once and cleared each step so headless
         // roll-outs never allocate. The buffer is handed back from Step() and overwritten by the next.
@@ -37,14 +39,22 @@ namespace Puckmite.Sim
         // depend on the (unstable) list order. Rebuilt each Step().
         private readonly List<int> _order = new List<int>();
 
-        public PuckSim(Vector2 boardMin, Vector2 boardMax, float friction, float restitution, float restThreshold)
+        public PuckSim(Vector2 boardMin, Vector2 boardMax, PuckSimConfig config)
         {
             _pucks = new List<Puck>();
             _boardMin = boardMin;
             _boardMax = boardMax;
-            _friction = friction;
-            _restitution = restitution;
-            _restThreshold = restThreshold;
+            _friction = config.Friction;
+            _restitution = config.Restitution;
+            _restThreshold = config.RestThreshold;
+            _wallRestitution = config.WallRestitution;
+            _collisionSpeedKept = config.CollisionSpeedKept;
+        }
+
+        /// <summary>Convenience overload with no wall damping (WallRestitution = 1).</summary>
+        public PuckSim(Vector2 boardMin, Vector2 boardMax, float friction, float restitution, float restThreshold)
+            : this(boardMin, boardMax, new PuckSimConfig(friction, restitution, restThreshold))
+        {
         }
 
         public IReadOnlyList<Puck> Pucks => _pucks;
@@ -53,6 +63,8 @@ namespace Puckmite.Sim
         public float Friction => _friction;
         public float Restitution => _restitution;
         public float RestThreshold => _restThreshold;
+        public float WallRestitution => _wallRestitution;
+        public float CollisionSpeedKept => _collisionSpeedKept;
 
         /// <summary>Adds a puck and returns its list index.</summary>
         public int AddPuck(Puck puck)
@@ -193,7 +205,8 @@ namespace Puckmite.Sim
         /// <summary>Deep copy of the entire simulation state.</summary>
         public PuckSim Clone()
         {
-            PuckSim copy = new PuckSim(_boardMin, _boardMax, _friction, _restitution, _restThreshold);
+            PuckSim copy = new PuckSim(_boardMin, _boardMax,
+                new PuckSimConfig(_friction, _restitution, _restThreshold, _wallRestitution, _collisionSpeedKept));
             copy._pucks.AddRange(_pucks); // Puck is a value type, so this copies every field of every puck.
             return copy;
         }
@@ -312,7 +325,7 @@ namespace Puckmite.Sim
                 p.Position = new Vector2(minX, p.Position.y);
                 if (p.Velocity.x < 0f)
                 {
-                    p.Velocity = new Vector2(-p.Velocity.x, p.Velocity.y);
+                    p.Velocity = new Vector2(-p.Velocity.x * _wallRestitution, p.Velocity.y);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
@@ -322,7 +335,7 @@ namespace Puckmite.Sim
                 p.Position = new Vector2(maxX, p.Position.y);
                 if (p.Velocity.x > 0f)
                 {
-                    p.Velocity = new Vector2(-p.Velocity.x, p.Velocity.y);
+                    p.Velocity = new Vector2(-p.Velocity.x * _wallRestitution, p.Velocity.y);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
@@ -333,7 +346,7 @@ namespace Puckmite.Sim
                 p.Position = new Vector2(p.Position.x, minY);
                 if (p.Velocity.y < 0f)
                 {
-                    p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y);
+                    p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y * _wallRestitution);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
@@ -343,7 +356,7 @@ namespace Puckmite.Sim
                 p.Position = new Vector2(p.Position.x, maxY);
                 if (p.Velocity.y > 0f)
                 {
-                    p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y);
+                    p.Velocity = new Vector2(p.Velocity.x, -p.Velocity.y * _wallRestitution);
                     p.BounceCount++;
                     _events.Add(PuckSimEvent.WallBounce(p.Id));
                 }
@@ -393,6 +406,13 @@ namespace Puckmite.Sim
                 Vector2 impulse = normal * impulseMagnitude;
                 a.Velocity -= impulse * invMassA;
                 b.Velocity += impulse * invMassB;
+
+                // Feel knob (not physical): bleed a fraction of both pucks' speed on the impact so a
+                // collision always costs energy, even a glancing one. Applied once per impact (this
+                // branch only runs when the pucks are approaching).
+                a.Velocity *= _collisionSpeedKept;
+                b.Velocity *= _collisionSpeedKept;
+
                 _events.Add(PuckSimEvent.PuckCollision(a.Id, b.Id, impulseMagnitude));
             }
 
