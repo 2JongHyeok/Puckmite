@@ -100,6 +100,11 @@ namespace Puckmite.View
         private static readonly Color RingFaint = new Color(1f, 0.9f, 0.25f, 0.25f);
         private static readonly Color RingLaunchReady = new Color(1f, 0.35f, 0.25f, 0.95f);
         private static readonly Color RingBlocked = new Color(0.55f, 0.55f, 0.60f, 0.55f); // entry spot occupied
+        private static readonly Color RingHover = new Color(1f, 0.25f, 0.20f, 0.9f);      // an enemy and its stones
+
+        // Hover rings sit outside the other rings so a stone can wear both at once (its owner's turn ring
+        // and the hover link) and still read as two.
+        private const float HoverRingScale = 1.55f;
 
         // Highlight rings reach this far out from a stone's centre, in radii. The entry spot is inset by it
         // so a waiting stone's ring clears the wall instead of being sliced by it.
@@ -139,7 +144,9 @@ namespace Puckmite.View
         private int _actorCount;
         private int _currentActor;
         private bool _hasRolledThisTurn;
-        private SpriteRenderer[] _turnRings; // highlight behind the current actor's stones
+        private SpriteRenderer[] _turnRings;  // highlight behind the current actor's stones
+        private SpriteRenderer[] _hoverRings; // links a hovered enemy to its stones (design doc 4.1)
+        private int _hoveredEnemyActor = -1;  // enemy under the cursor, by character or by stone; -1 = none
         private readonly List<int> _settleIds = new List<int>(); // reused: current actor's stone ids to settle
 
         // Top character row (design doc 2.2): one stat text per actor. Each actor's buff is a snapshot taken
@@ -284,6 +291,7 @@ namespace Puckmite.View
             UpdateCellHighlights();
             UpdateTurnHighlights();
             UpdateGhost();
+            UpdateHoverHighlight(); // before the character row, which reads the hovered enemy
             UpdateCharacterStats();
         }
 
@@ -303,6 +311,7 @@ namespace Puckmite.View
             BuildCellHighlights();
             BuildPuckViews();
             BuildTurnRings();
+            BuildHoverRings();
             BuildCharacters();
             BuildGhost();
             BuildPreviewLine();
@@ -1043,6 +1052,25 @@ namespace Puckmite.View
             }
         }
 
+        // Pool for the hover link. One per stone, drawn behind the turn rings so both can show at once.
+        private void BuildHoverRings()
+        {
+            int count = InitialRoster().Count;
+            _hoverRings = new SpriteRenderer[count];
+            for (int i = 0; i < count; i++)
+            {
+                GameObject go = new GameObject($"HoverRing{i}");
+                go.transform.SetParent(transform, false);
+
+                SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = ProceduralSprites.Circle();
+                sr.color = RingHover;
+                sr.sortingOrder = 7; // outside and behind the turn rings (8)
+                sr.enabled = false;
+                _hoverRings[i] = sr;
+            }
+        }
+
         // Builds the top character row: one placeholder widget per actor (design doc 2.2) — a body circle in
         // the team colour with a name + stat block below it that UpdateCharacterStats refreshes.
         private void BuildCharacters()
@@ -1172,6 +1200,84 @@ namespace Puckmite.View
             }
         }
 
+        // Links an enemy to its stones both ways (design doc 4.1): hover the character and its stones light
+        // up, hover any of its stones and the character does. Runs every frame regardless of whose turn it
+        // is and whether input is accepted, so it works during the enemy's own turn too.
+        private void UpdateHoverHighlight()
+        {
+            _hoveredEnemyActor = HoveredEnemyActor();
+
+            for (int i = 0; i < _hoverRings.Length; i++)
+            {
+                _hoverRings[i].enabled = false;
+            }
+
+            if (_hoveredEnemyActor < 0)
+            {
+                return;
+            }
+
+            int next = 0;
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count && next < _hoverRings.Length; i++)
+            {
+                Puck p = pucks[i];
+                if (_actorOf[p.Id] != _hoveredEnemyActor)
+                {
+                    continue;
+                }
+
+                SpriteRenderer ring = _hoverRings[next++];
+                float d = p.Radius * HoverRingScale * 2f;
+                ring.transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+                ring.transform.localScale = new Vector3(d, d, 1f);
+                ring.enabled = true;
+            }
+        }
+
+        // The enemy the cursor is on — its character body, or any stone it owns. -1 when the cursor is on
+        // the HUD, on the player's own things, or on nothing.
+        private int HoveredEnemyActor()
+        {
+            Mouse mouse = Mouse.current;
+            if (mouse == null || _actorDead == null)
+            {
+                return -1;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            if (PointerOverHud(screen))
+            {
+                return -1;
+            }
+
+            Vector2 world = ScreenToWorld(screen);
+
+            int character = CharacterAt(world);
+            if (character > 0 && !_actorDead[character])
+            {
+                return character;
+            }
+
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                Puck p = pucks[i];
+                int owner = _actorOf[p.Id];
+                if (owner == 0)
+                {
+                    continue; // the player's own stones are not part of this link
+                }
+
+                if ((p.Position - world).magnitude <= p.Radius * RingRadiusScale)
+                {
+                    return owner;
+                }
+            }
+
+            return -1;
+        }
+
         // Writes each actor's character row: bold name, current/max health, and attack/shield including the
         // buff snapshot locked in at that actor's last turn end (design doc 3.6 — held until its next turn).
         // The body is tinted grey when the character is down, and brightened while it is a legal target.
@@ -1212,15 +1318,24 @@ namespace Puckmite.View
         private void UpdateCharacterRing(int actor)
         {
             SpriteRenderer ring = _characterTargetRings[actor];
-            if (!_awaitingAttack)
+            if (_awaitingAttack)
             {
-                ring.enabled = false;
+                bool strong = actor == _currentActor || actor == _hoveredCharacter;
+                ring.color = strong ? RingStrong : RingFaint;
+                ring.enabled = true;
                 return;
             }
 
-            bool strong = actor == _currentActor || actor == _hoveredCharacter;
-            ring.color = strong ? RingStrong : RingFaint;
-            ring.enabled = true;
+            // Outside the attack phase the ring still marks the enemy under the cursor, tying it to the
+            // stones lit up on the board (design doc 4.1).
+            if (actor == _hoveredEnemyActor)
+            {
+                ring.color = RingHover;
+                ring.enabled = true;
+                return;
+            }
+
+            ring.enabled = false;
         }
 
         // Base value, plus the bonus in parentheses when buffed, so the turn-end gain is visible (e.g. "6 (+4)").
