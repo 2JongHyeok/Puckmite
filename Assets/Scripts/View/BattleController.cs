@@ -95,6 +95,12 @@ namespace Puckmite.View
         private bool _runCleared;           // run won: waiting on the enter-shop button
         private bool _campaignCleared;
 
+        // Defeat and the campaign clear hand over to their end screens (사용자 지정) after this beat, so
+        // the deciding blow is still readable on the board. A cleared RUN never sets the timer — there
+        // the shop button is the way on.
+        private const float EndScreenDelay = 1.5f;
+        private float _endScreenTimer;
+
         // Stage-1 boss: the board-warping caster. It rolls no stones; each of its turns casts one random
         // ability instead, active until its next turn (StartTurn clears and re-casts). The dice are rolled
         // HERE in the view — the sim only receives the outcome, so it stays deterministic.
@@ -394,6 +400,25 @@ namespace Puckmite.View
         protected override void Update()
         {
             base.Update();
+
+            // A decided campaign moves on to its end screen once the beat has passed.
+            if (_endScreenTimer > 0f)
+            {
+                _endScreenTimer -= Time.deltaTime;
+                if (_endScreenTimer <= 0f)
+                {
+                    if (_campaignCleared)
+                    {
+                        GameFlow.LoadGameClear();
+                    }
+                    else
+                    {
+                        GameFlow.LoadGameOver();
+                    }
+
+                    return;
+                }
+            }
 
             HandleInput();
             DriveSimulation();
@@ -1187,6 +1212,7 @@ namespace Puckmite.View
             {
                 _gameOver = true;
                 _gameOverText = $"Defeat on stage {Campaign.Stage}-{Campaign.Run}.";
+                _endScreenTimer = EndScreenDelay; // the game-over screen takes it from here (사용자 지정)
                 return;
             }
 
@@ -1221,19 +1247,13 @@ namespace Puckmite.View
             {
                 _campaignCleared = true;
                 _gameOverText = "All stages cleared.";
+                _endScreenTimer = EndScreenDelay; // the game-clear screen takes it from here (사용자 지정)
                 return;
             }
 
             _gameOverText = lastRun
                 ? $"Stage {Campaign.Stage} cleared. Healed to {Campaign.NextRunHealth}."
                 : $"Run {Campaign.Stage}-{Campaign.Run} cleared. Healed to {Campaign.NextRunHealth}.";
-        }
-
-        // No continue, no permanent unlocks (design doc 2.1): a defeat restarts the whole campaign.
-        private void RestartCampaign()
-        {
-            Campaign.Reset();
-            GameFlow.LoadBattle();
         }
 
         private string RunLabel()
@@ -1851,26 +1871,13 @@ namespace Puckmite.View
             GUILayout.Label($"Puckmite — {RunLabel()}");
             GUILayout.Label(_gameOver ? $"** {_gameOverText} **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
 
-            if (_campaignCleared)
+            // The shop opens straight after a cleared run and is the only way on (design doc 2.1).
+            // Defeat and the campaign clear need no button — their end screens load themselves.
+            if (_runCleared && !_campaignCleared)
             {
-                if (GUILayout.Button("Start over"))
-                {
-                    RestartCampaign();
-                }
-            }
-            else if (_runCleared)
-            {
-                // The shop opens straight after a cleared run and is the only way on (design doc 2.1).
                 if (GUILayout.Button("Enter shop  ▶"))
                 {
                     GameFlow.LoadShop();
-                }
-            }
-            else if (_gameOver)
-            {
-                if (GUILayout.Button("Restart from stage 1"))
-                {
-                    RestartCampaign();
                 }
             }
 

@@ -465,10 +465,14 @@ Assets/Scripts/View   렌더링, 입력 — ArenaControllerBase(공용), BattleC
 캠페인: 3스테이지 × 5런을 돌며 런 사이마다 상점이 열린다.
 
 > 놀이터(`PuckmitePlaytest` 단일 파일)는 씬 분리 리팩터링으로 해체됐다. 지금 구조:
-> - **씬 2개** — `Battle.unity`(전투) / `Shop.unity`(상점), `Tools/Puckmite/Setup Game Scenes` 메뉴가 생성·재설정(멱등).
->   씬에는 카메라와 컨트롤러 GO만 있고 보드·퍽·UI는 여전히 런타임 절차 생성.
->   전환: 런 승리 → Enter shop → Shop 로드 → 나가기(정산) → 다음 런 Battle 로드. 패배 → 캠페인 리셋 후 Battle.
->   시작/엔딩 화면은 나중에 `GameFlow`에 씬 이름을 추가해 끼워 넣는다.
+> - **씬 5개** — `Title`(시작, 빌드 0번) / `Battle` / `Shop` / `GameOver` / `GameClear`,
+>   `Tools/Puckmite/Setup Game Scenes` 메뉴가 생성·재설정(멱등). 씬에는 카메라와 컨트롤러 GO만 있고
+>   보드·퍽·UI는 여전히 런타임 절차 생성.
+>   흐름: Title(게임 시작=새 캠페인) → Battle → 런 승리 시 Shop → 나가기(정산) → 다음 런 Battle …
+>   플레이어 사망 → 1.5초 여운 → **GameOver**(타이틀로), 3스테이지 클리어 → **GameClear**(타이틀로).
+>   캠페인 리셋은 Title의 게임 시작 버튼에서만 일어난다.
+> - **프레이밍 화면** — `SimpleScreenController`(제목 + 버튼 하나) 베이스에 Title/GameOver/GameClear
+>   컨트롤러 3개. IMGUI 자리표시, 스타일은 나중에.
 > - **공용 베이스** `ArenaControllerBase` — 고정 스텝 드라이버, 카메라/퍽 뷰 절차 생성, Id 인덱스 뷰 배열,
 >   손·진입 고스트, 당겨 쏘기 조준 + 궤적 미리보기, 하이라이트 링. `BattleController`/`ShopController`가 상속.
 > - **캠페인 상태** `CampaignState`(순수 C#) — 스테이지·런·골드·강화·이월 체력·`ShopBoard`.
@@ -722,7 +726,7 @@ Assets/Scripts/View   렌더링, 입력 — ArenaControllerBase(공용), BattleC
 - **스톤 특성 시스템** (개별 스톤에 귀속되는 규칙 변형)
 - **전투 후 보상 선택** (셋 중 하나 고르기)
 - **맵과 갈림길 선택** (현재는 3스테이지 x 5런의 고정 진행)
-- **메인 메뉴**
+- ~~**메인 메뉴**~~ → 간단한 타이틀 화면으로 구현됨 (7.7 — 게임 이름 + 시작 버튼, 확장은 나중에)
 - **이어하기**
 
 ## 명시적으로 제거된 것

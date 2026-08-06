@@ -16,8 +16,11 @@ namespace Puckmite.EditorTools
     public static class PuckmiteSceneSetup
     {
         private const string TuningPath = "Assets/Settings/GameTuning.asset";
+        private const string TitlePath = "Assets/Scenes/Title.unity";
         private const string BattlePath = "Assets/Scenes/Battle.unity";
         private const string ShopPath = "Assets/Scenes/Shop.unity";
+        private const string GameOverPath = "Assets/Scenes/GameOver.unity";
+        private const string GameClearPath = "Assets/Scenes/GameClear.unity";
 
         private const string LegacyScenePath = "Assets/Scenes/TestScene.unity";
         private const string LegacyScriptPath = "Assets/Scripts/View/PuckmitePlaytest.cs";
@@ -34,17 +37,23 @@ namespace Puckmite.EditorTools
             EnsureTuningAsset();
             SetupScene<BattleController>(BattlePath, "Battle");
             SetupScene<ShopController>(ShopPath, "Shop");
+            SetupSimpleScene<TitleController>(TitlePath, "Title");
+            SetupSimpleScene<GameOverController>(GameOverPath, "GameOver");
+            SetupSimpleScene<GameClearController>(GameClearPath, "GameClear");
 
-            // Battle first: index 0 is what a build opens with (a title scene will take this slot later).
+            // Title first: index 0 is what a build opens with (사용자 지정: 제일 처음 씬).
             EditorBuildSettings.scenes = new[]
             {
+                new EditorBuildSettingsScene(TitlePath, true),
                 new EditorBuildSettingsScene(BattlePath, true),
                 new EditorBuildSettingsScene(ShopPath, true),
+                new EditorBuildSettingsScene(GameOverPath, true),
+                new EditorBuildSettingsScene(GameClearPath, true),
             };
 
             AssetDatabase.SaveAssets();
-            EditorSceneManager.OpenScene(BattlePath, OpenSceneMode.Single);
-            Debug.Log("[Puckmite] Battle and Shop scenes ready and in Build Settings. Press Play in Battle.");
+            EditorSceneManager.OpenScene(TitlePath, OpenSceneMode.Single);
+            Debug.Log("[Puckmite] All five scenes ready and in Build Settings. Press Play in Title.");
         }
 
         private static void EnsureTuningAsset()
@@ -105,6 +114,30 @@ namespace Puckmite.EditorTools
             {
                 Debug.LogError($"[Puckmite] Wiring did not stick in '{rootName}' — the tuning reference saved as null.");
             }
+        }
+
+        // The framing screens (title / game over / game clear) need only a camera and their controller —
+        // no tuning, no debug panel, nothing to wire.
+        private static void SetupSimpleScene<T>(string path, string rootName) where T : MonoBehaviour
+        {
+            Scene scene = File.Exists(path)
+                ? EditorSceneManager.OpenScene(path, OpenSceneMode.Single)
+                : EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            Camera camera = Object.FindAnyObjectByType<Camera>();
+            if (camera == null)
+            {
+                GameObject camGo = new GameObject("Main Camera") { tag = "MainCamera" };
+                camGo.AddComponent<Camera>();
+                camGo.AddComponent<AudioListener>();
+            }
+
+            if (Object.FindAnyObjectByType<T>() == null)
+            {
+                new GameObject(rootName).AddComponent<T>();
+            }
+
+            EditorSceneManager.SaveScene(scene, path);
         }
 
         private static void SetReference(Object target, string field, Object value)
