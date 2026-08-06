@@ -223,9 +223,9 @@ namespace Puckmite.View
         private readonly List<Vector2> _planEntrySpots = new List<Vector2>();
         private readonly List<Vector2> _entryScanScratch = new List<Vector2>(); // reused by the edge scan
 
-        // Progression (design doc 2.1): 3 stages of 5 runs, enemy counts fixed per run, shop between runs
-        // (step 13 — the "next run" button stands in its slot for now). Only the player's health carries
-        // across runs; base shield, stone levels and the board are all run-scoped.
+        // Progression (design doc 2.1): 3 stages of 5 runs, enemy counts fixed per run, shop between runs.
+        // Only the player's health carries across runs; base shield, stone levels and the board are all
+        // run-scoped.
         private const int StageCount = 3;
         private static readonly int[] RunEnemyCounts = { 1, 1, 2, 3, 1 }; // last is the boss run (boss itself: step 14)
 
@@ -1941,9 +1941,9 @@ namespace Puckmite.View
 
         // --- Progression (design doc 2.1) -----------------------------------------------------------
 
-        // Run won: the player heals a set amount and carries that health into the next run. The board waits
-        // on the next-run button — the slot the shop will take (design doc 2.1: it opens straight away and
-        // cannot be skipped).
+        // Run won: the player heals a set amount and carries that health into the next run. The cleared board
+        // stays up until the player enters the shop, which is the only way on (design doc 2.1: it opens
+        // straight away and cannot be skipped).
         private void ClearRun()
         {
             _gameOver = true;
