@@ -50,6 +50,13 @@ namespace Puckmite.Sim
         private readonly List<int> _settleCells = new List<int>();
         private readonly List<int> _settleDead = new List<int>();
 
+        // The boss's hole (design: stage-1 boss board warp). One cell, or -1 for none. A puck whose CENTRE
+        // is inside the cell is destroyed at the end of each step, health notwithstanding — so the preview's
+        // invincible cue still vanishes into it, which is exactly the information the player should get.
+        // WHERE the hole goes is decided outside (the view rolls the dice); given that state the sim stays
+        // deterministic.
+        private int _holeCell = -1;
+
         public PuckSim(Vector2 boardMin, Vector2 boardMax, PuckSimConfig config)
         {
             _pucks = new List<Puck>();
@@ -149,6 +156,41 @@ namespace Puckmite.Sim
             }
         }
 
+        /// <summary>The hole's linear cell index (col + row * BoardCells.Size), or -1 when there is none.</summary>
+        public int HoleCell => _holeCell;
+
+        /// <summary>Opens the hole on the given cell (replacing any previous one). Pucks whose centre is
+        /// inside are destroyed at the end of each <see cref="Step"/>; a board at rest takes no steps, so
+        /// the caller must cull already-parked pucks itself (mirror of SettleDamageCells' contract).</summary>
+        public void SetHole(int col, int row)
+        {
+            _holeCell = col + row * BoardCells.Size;
+        }
+
+        public void ClearHole()
+        {
+            _holeCell = -1;
+        }
+
+        /// <summary>Whether a point is inside the hole cell. Half-open bounds ([min, max)) so a centre on a
+        /// shared cell edge belongs to exactly one cell, deterministically. The single source of the hole
+        /// rule — Step() and the view's cast-time cull must agree or they would disagree mid-flight vs parked.</summary>
+        public bool IsInsideHole(Vector2 position)
+        {
+            if (_holeCell < 0)
+            {
+                return false;
+            }
+
+            Vector2 size = BoardCells.CellSize(_boardMin, _boardMax);
+            int col = _holeCell % BoardCells.Size;
+            int row = _holeCell / BoardCells.Size;
+            float minX = _boardMin.x + col * size.x;
+            float minY = _boardMin.y + row * size.y;
+            return position.x >= minX && position.x < minX + size.x
+                && position.y >= minY && position.y < minY + size.y;
+        }
+
         /// <summary>Finds a puck by Id. Returns false if no puck has that Id.</summary>
         public bool TryGetPuck(int id, out Puck puck)
         {
@@ -244,6 +286,7 @@ namespace Puckmite.Sim
             }
 
             RemoveDeadPucks();
+            RemovePucksInHole();
 
             return _events;
         }
@@ -301,6 +344,7 @@ namespace Puckmite.Sim
             PuckSim copy = new PuckSim(_boardMin, _boardMax,
                 new PuckSimConfig(_friction, _restitution, _restThreshold, _wallRestitution, _collisionSpeedKept));
             copy._pucks.AddRange(_pucks); // Puck is a value type, so this copies every field of every puck.
+            copy._holeCell = _holeCell;   // so previews and roll-outs see the hole too
             return copy;
         }
 
@@ -391,6 +435,39 @@ namespace Puckmite.Sim
             for (int i = 0; i < _pucks.Count; i++)
             {
                 if (_pucks[i].Health <= 0)
+                {
+                    _dead.Add(_pucks[i].Id);
+                }
+            }
+
+            if (_dead.Count == 0)
+            {
+                return;
+            }
+
+            _dead.Sort();
+            for (int i = 0; i < _dead.Count; i++)
+            {
+                _events.Add(PuckSimEvent.PuckDestroyed(_dead[i]));
+                RemovePuck(_dead[i]);
+            }
+        }
+
+        // Removes pucks whose centre sits inside the hole cell, emitting PuckDestroyed for each — the same
+        // signal a health death gives, so the hand-return path upstream needs no special case. Runs after
+        // RemoveDeadPucks so a puck cannot be destroyed (and reported) twice in one step. Health is not
+        // consulted: the hole swallows regardless. Ascending Id order for determinism.
+        private void RemovePucksInHole()
+        {
+            if (_holeCell < 0)
+            {
+                return;
+            }
+
+            _dead.Clear();
+            for (int i = 0; i < _pucks.Count; i++)
+            {
+                if (IsInsideHole(_pucks[i].Position))
                 {
                     _dead.Add(_pucks[i].Id);
                 }

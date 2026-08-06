@@ -53,6 +53,9 @@ namespace Puckmite.Sim
                 ShopPlacementCheck(),
                 ShopUpgradeSumCheck(),
                 ShopEmptyCellCheck(),
+                HoleDestructionCheck(),
+                HoleCloneCheck(),
+                HoleClearedCheck(),
             };
         }
 
@@ -815,6 +818,84 @@ namespace Puckmite.Sim
             bool passed = totals.Attack == 0 && totals.Shield == 0 && totals.RunHeal == 0 && totals.MaxHealth == 0;
             string detail = $"a{totals.Attack} s{totals.Shield} h{totals.RunHeal} m{totals.MaxHealth} (all expected 0).";
             return new CheckResult("Shop empty cells", passed, detail);
+        }
+
+        /// <summary>The boss's hole: a stone whose centre crosses the hole cell mid-flight is destroyed —
+        /// health notwithstanding — with a PuckDestroyed event, exactly like a health death upstream.</summary>
+        public static CheckResult HoleDestructionCheck()
+        {
+            PuckSim sim = BuildHoleScene(out _);
+            sim.SetHole(2, 2); // centre cell, x in [-2.5, 2.5)
+
+            List<PuckSimEvent> events = RunToRestCollecting(sim);
+            bool destroyed = !sim.TryGetPuck(0, out _) && sim.Pucks.Count == 0;
+            bool eventSeen = false;
+            for (int i = 0; i < events.Count; i++)
+            {
+                if (events[i].Type == PuckSimEventType.PuckDestroyed && events[i].PuckA == 0)
+                {
+                    eventSeen = true;
+                }
+            }
+
+            bool passed = destroyed && eventSeen;
+            string detail = $"destroyed={destroyed}, PuckDestroyed event={eventSeen}.";
+            return new CheckResult("Hole destruction", passed, detail);
+        }
+
+        /// <summary>Clone() carries the hole, so previews and roll-outs see it: the clone's stone dies in
+        /// the copied hole exactly like the original's.</summary>
+        public static CheckResult HoleCloneCheck()
+        {
+            PuckSim sim = BuildHoleScene(out _);
+            sim.SetHole(2, 2);
+
+            PuckSim clone = sim.Clone();
+            bool holeCopied = clone.HoleCell == sim.HoleCell && clone.HoleCell == 2 + 2 * BoardCells.Size;
+
+            clone.RunToRest();
+            sim.RunToRest();
+            bool bothDestroyed = clone.Pucks.Count == 0 && sim.Pucks.Count == 0;
+
+            bool passed = holeCopied && bothDestroyed;
+            string detail = $"holeCopied={holeCopied} (cell {clone.HoleCell}), destroyed clone&original={bothDestroyed}.";
+            return new CheckResult("Hole clone", passed, detail);
+        }
+
+        /// <summary>No hole by default, and a cleared hole swallows nothing: the same crossing stone
+        /// survives to rest on the far side.</summary>
+        public static CheckResult HoleClearedCheck()
+        {
+            PuckSim sim = BuildHoleScene(out Puck stone);
+            bool noneByDefault = sim.HoleCell == -1 && !sim.IsInsideHole(new Vector2(0f, 0f));
+
+            sim.SetHole(2, 2);
+            sim.ClearHole();
+            sim.RunToRest();
+
+            bool survived = sim.TryGetPuck(stone.Id, out Puck after) && after.Health == stone.Health;
+            bool crossed = survived && after.Position.x > 2.5f; // came to rest past the hole cell
+
+            bool passed = noneByDefault && survived && crossed;
+            string detail = $"noneByDefault={noneByDefault}, survived={survived}, restX={(survived ? after.Position.x : float.NaN):F2} (expect > 2.5).";
+            return new CheckResult("Hole cleared", passed, detail);
+        }
+
+        // One stone rolling left-to-right straight through the centre cell (2,2) on the real board size.
+        // Speed 18 at friction 10 travels v²/2a ≈ 16 units: through the hole cell (reached after 7.5) and
+        // to rest near x ≈ +6 — past the cell for the survives-and-crosses assertion, yet well short of
+        // the right wall (x = 11), which would bounce it back to the left half and break that assertion.
+        private static PuckSim BuildHoleScene(out Puck stone)
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            stone = new Puck(0, new Vector2(-10f, 0f), 1.5f, 1f, PuckOwner.Player)
+            {
+                Health = 5,
+                Velocity = new Vector2(18f, 0f),
+            };
+            sim.AddPuck(stone);
+            return sim;
         }
 
         private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)

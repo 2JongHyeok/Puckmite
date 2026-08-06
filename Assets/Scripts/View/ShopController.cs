@@ -121,6 +121,12 @@ namespace Puckmite.View
             return world.x;
         }
 
+        // The shop is the player alone (design doc 5.4).
+        protected override int DeclaredActorCount()
+        {
+            return 1;
+        }
+
         protected override void EntryAxisBounds(out float min, out float max)
         {
             min = _sim.BoardMin.x;

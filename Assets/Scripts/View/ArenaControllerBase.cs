@@ -222,8 +222,14 @@ namespace Puckmite.View
             }
 
             // Rebuild in place, preserving every puck exactly as it is now (position, velocity, bounces),
-            // so a slider tweak is felt immediately even mid-roll.
+            // so a slider tweak is felt immediately even mid-roll. The boss's open hole is sim state too —
+            // BuildSimFrom starts fresh, so carry it across or a slider nudge would quietly cancel the ability.
+            int hole = _sim.HoleCell;
             BuildSimFrom(SnapshotPucks());
+            if (hole >= 0)
+            {
+                _sim.SetHole(hole % BoardCells.Size, hole / BoardCells.Size);
+            }
         }
 
         private List<Puck> SnapshotPucks()
@@ -302,6 +308,8 @@ namespace Puckmite.View
 
         // Assigns each puck to a turn actor from the fixed roster: the player is actor 0 (owns all its
         // stones); each enemy is its own actor (1, 2, 3, ...). Combat teams (Owner) are unchanged.
+        // The actor COUNT is declared by the scene, not derived from the stones — a stoneless actor
+        // (the stage-1 boss) would otherwise not exist at all and the run would be won on arrival.
         private void AssignActors()
         {
             List<Puck> roster = InitialRoster();
@@ -313,10 +321,14 @@ namespace Puckmite.View
                 _actorOf[p.Id] = p.Owner == PuckOwner.Player ? 0 : nextEnemy++;
             }
 
-            _actorCount = nextEnemy; // player (0) + enemies (1 .. nextEnemy-1)
+            _actorCount = DeclaredActorCount();
             _currentActor = 0;
             _hasRolledThisTurn = false;
         }
+
+        /// <summary>How many turn actors this scene fields (player included), stones or not. Stone-to-actor
+        /// mapping still assumes one stone per enemy — revisit both together if that ever changes.</summary>
+        protected abstract int DeclaredActorCount();
 
         // --- Hand and new stone entry (design doc 3.3/3.4) ------------------------------------------
 
@@ -422,8 +434,15 @@ namespace Puckmite.View
         }
 
         // Launching from inside another stone would shove it aside for free, so such a spot is refused.
+        // A spot inside the boss's hole is refused too: the stone would be swallowed on its first step,
+        // which the preview cannot draw — better the grey "spot blocked" ring than a silent wasted roll.
         protected bool EntrySpotBlocked(Vector2 position)
         {
+            if (_sim.IsInsideHole(position))
+            {
+                return true;
+            }
+
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             for (int i = 0; i < pucks.Count; i++)
             {

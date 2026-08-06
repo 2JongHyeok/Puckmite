@@ -31,6 +31,11 @@ namespace Puckmite.View
         public int EnemyBaseAttack = 1;
         public int EnemyBaseShield = 0;
 
+        [Header("Boss — stage 1 (사용자 지정 HP 100 / ATK 10; 최종은 16단계에서)")]
+        public int BossBaseHealth = 100;
+        public int BossBaseAttack = 10;
+        public int BossBaseShield = 0;
+
         [Header("Progression — 임시 (런 종료 회복량은 10.1에서 미정)")]
         public int RunEndHeal = 5;       // health restored after clearing a run (design doc 2.1)
         public int PlayerStoneCount = 2; // design doc 3.3: the player starts with 2

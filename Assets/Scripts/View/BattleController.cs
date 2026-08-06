@@ -94,12 +94,31 @@ namespace Puckmite.View
         private bool _runCleared;           // run won: waiting on the enter-shop button
         private bool _campaignCleared;
 
+        // Stage-1 boss: the board-warping caster. It rolls no stones; each of its turns casts one random
+        // ability instead, active until its next turn (StartTurn clears and re-casts). The dice are rolled
+        // HERE in the view — the sim only receives the outcome, so it stays deterministic.
+        private enum BossAbility
+        {
+            CorruptCells,
+            Hole,
+            DamageAll,
+        }
+
+        private readonly List<int> _debuffCells = new List<int>(); // corrupted inner-cell indices, this round
+        private SpriteRenderer[] _buffCellViews; // the inner 3x3 quads, recoloured while corrupted
+        private SpriteRenderer _holeView;        // dark quad over the hole cell while one is open
+        private static readonly Color CorruptCellColor = new Color(0.36f, 0.10f, 0.16f);
+
         // Diagnostics and controls for the debug panel.
         public float AiPlanMs => _aiPlanMs;
         public int AiPlanCandidates => _aiPlanCandidates;
         public bool CanRestartRun => !_gameOver;
 
         private static CampaignState Campaign => GameFlow.Campaign;
+
+        // Stage-1 boss (run 5 of stage 1). Stages 2-3 keep the ordinary-enemy placeholder until their own
+        // bosses are built.
+        private static bool IsStage1Boss => Campaign.IsBossRun && Campaign.Stage == 1;
 
         // --- Scene wiring -------------------------------------------------------------------------
 
@@ -132,13 +151,21 @@ namespace Puckmite.View
                 roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Player) { Health = _tuning.StoneHealth });
             }
 
-            int enemies = Campaign.EnemyCountForRun;
+            // The stage-1 boss fields no stones at all — its turns cast board-warping abilities instead.
+            int enemies = IsStage1Boss ? 0 : Campaign.EnemyCountForRun;
             for (int i = 0; i < enemies; i++)
             {
                 roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Enemy) { Health = _tuning.StoneHealth });
             }
 
             return roster;
+        }
+
+        // Player + this run's enemies — declared, not derived from stones, so the stoneless boss still
+        // gets its actor slot, its turn and its character widget.
+        protected override int DeclaredActorCount()
+        {
+            return 1 + Campaign.EnemyCountForRun;
         }
 
         // The entry edge: the player's new stones come in on the left, an enemy's on the right, hugging that
@@ -191,7 +218,10 @@ namespace Puckmite.View
                 {
                     _noStoneTurn = false;
                     CaptureActorBuff(_currentActor); // no stones, so this is base stats only
-                    BeginAttackPhase();
+                    if (!_gameOver) // corrupted shield cells can end the run inside the capture
+                    {
+                        BeginAttackPhase();
+                    }
                 }
             }
 
@@ -210,11 +240,15 @@ namespace Puckmite.View
             if (!_gameOver && !_awaitingAttack && _hasRolledThisTurn && _sim.AllAtRest())
             {
                 CaptureActorBuff(_currentActor);
-                BeginAttackPhase();
+                if (!_gameOver) // corrupted shield cells can end the run inside the capture
+                {
+                    BeginAttackPhase();
+                }
             }
 
             UpdatePuckTransforms();
             UpdateCellHighlights();
+            UpdateBossEffectVisuals();
             UpdateTurnHighlights();
             UpdateGhost();
             UpdateHoverHighlight(); // before the character row, which reads the hovered enemy
@@ -241,6 +275,18 @@ namespace Puckmite.View
                     PromoteHand(_currentActor);    // playable from this turn on (design doc 3.3)
                     ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                     SettleCurrentActor();          // stones lost here go back to the hand as pending
+
+                    // The stage-1 boss rolls nothing: last round's board warp expires now ("until its next
+                    // turn"), a fresh ability is cast, and the no-stone beat carries the turn into its
+                    // forced attack.
+                    if (_currentActor != 0 && IsStage1Boss)
+                    {
+                        ClearBossEffects();
+                        CastBossAbility();
+                        _noStoneTurn = true;
+                        _noStoneTimer = _tuning.NoStoneTurnDelay;
+                        return;
+                    }
 
                     // A hand stone only counts as a move if somewhere on the edge is actually free — with no
                     // board stone to cue either, a fully blocked edge would leave no legal roll and the turn
@@ -378,6 +424,31 @@ namespace Puckmite.View
                 return;
             }
 
+            // Skipping the roll (사용자 지정 — the forced roll of design doc 3.5 is now optional): before
+            // rolling, clicking an enemy character attacks at once with the board exactly as it stands,
+            // and the turn ends. Player only, and only while everything is at rest — a click while stones
+            // are still moving must not fire this.
+            if (_currentActor == 0 && !_hasRolledThisTurn && !_noStoneTurn && !_aiming
+                && mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen) && _sim.AllAtRest())
+            {
+                int skipTarget = CharacterAt(world);
+                if (skipTarget > 0 && !_actorDead[skipTarget])
+                {
+                    CaptureActorBuff(_currentActor); // "현재 보드 상태로" — the snapshot is taken right now
+                    if (!_gameOver) // corrupted shield cells can end the run inside the capture
+                    {
+                        ResolveAttack(_currentActor, skipTarget);
+                    }
+
+                    if (!_gameOver)
+                    {
+                        AdvanceTurn();
+                    }
+
+                    return;
+                }
+            }
+
             UpdateGhostAim(world);
 
             if (mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen) && !_hasRolledThisTurn)
@@ -484,6 +555,110 @@ namespace Puckmite.View
         }
 
         // --- Enemy AI ------------------------------------------------------------------------------
+
+        // --- Stage-1 boss abilities -----------------------------------------------------------------
+
+        private void ClearBossEffects()
+        {
+            _debuffCells.Clear();
+            _sim.ClearHole();
+        }
+
+        private void CastBossAbility()
+        {
+            BossAbility ability = (BossAbility)Random.Range(0, 3);
+            switch (ability)
+            {
+                case BossAbility.CorruptCells:
+                    CastCorruptCells();
+                    break;
+                case BossAbility.Hole:
+                    CastHole();
+                    break;
+                default:
+                    CastDamageAll();
+                    break;
+            }
+        }
+
+        // 1~2 inner buff cells flip for one round: an attack cell now drains attack, a shield cell now
+        // costs health — the sign flip itself happens in CaptureActorBuff. A duplicate pick simply
+        // collapses to one cell, which still lands inside the designed 1~2 range.
+        private void CastCorruptCells()
+        {
+            int picks = Random.Range(1, 3); // 1 or 2
+            for (int i = 0; i < picks; i++)
+            {
+                int col = Random.Range(1, 4);
+                int row = Random.Range(1, 4);
+                int index = col + row * BoardCells.Size;
+                if (!_debuffCells.Contains(index))
+                {
+                    _debuffCells.Add(index);
+                }
+            }
+
+            _attackLog = $"Boss corrupts {_debuffCells.Count} buff cell(s).";
+        }
+
+        // One random cell becomes a hole until the boss's next turn. The hole lives in the SIM (so the
+        // trajectory preview sees it through Clone), but a board at rest takes no sim steps — stones
+        // already parked on the cell are culled right here, the same re-query pattern settlement uses.
+        private void CastHole()
+        {
+            _sim.SetHole(Random.Range(0, BoardCells.Size), Random.Range(0, BoardCells.Size));
+
+            _removeIds.Clear();
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if (_sim.IsInsideHole(pucks[i].Position))
+                {
+                    _removeIds.Add(pucks[i].Id);
+                }
+            }
+
+            for (int i = 0; i < _removeIds.Count; i++)
+            {
+                _sim.RemovePuck(_removeIds[i]);
+                ReturnStoneToHand(_removeIds[i]); // swallowed stones come back as fresh ones (design doc 3.3)
+            }
+
+            _attackLog = "Boss opens a hole in the board.";
+        }
+
+        // Every stone on the board loses 1 health; any at 0 is destroyed and returns to its owner's hand.
+        private void CastDamageAll()
+        {
+            _settleIds.Clear();
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                _settleIds.Add(pucks[i].Id);
+            }
+
+            for (int i = 0; i < _settleIds.Count; i++)
+            {
+                if (!_sim.TryGetPuck(_settleIds[i], out Puck p))
+                {
+                    continue;
+                }
+
+                if (p.Health <= 1)
+                {
+                    _sim.RemovePuck(p.Id);
+                    ReturnStoneToHand(p.Id);
+                }
+                else
+                {
+                    _sim.SetHealth(p.Id, p.Health - 1);
+                }
+            }
+
+            _attackLog = "Boss racks the board — every stone loses 1 health.";
+        }
+
+        // --- Enemy AI (continued) --------------------------------------------------------------------
 
         // The debug panel's toggle routes through here so a mid-aim switch cannot leave a stale shot armed.
         public void SetEnemyAiEnabled(bool value)
@@ -663,6 +838,16 @@ namespace Puckmite.View
         {
             int damage = BaseAttack(attacker) + _actorBuffAttack[attacker];
 
+            // Corrupted attack cells can push the total below zero; a negative attack HEALS the target by
+            // that amount instead (사용자 확정), capped at its base maximum. Shields are untouched.
+            if (damage < 0)
+            {
+                int healed = Mathf.Min(-damage, BaseHealth(target) - _actorHealth[target]);
+                _actorHealth[target] += healed;
+                _attackLog = $"{ActorName(attacker)}'s corrupted attack heals {ActorName(target)} for {healed}.";
+                return;
+            }
+
             int fromEffect = Mathf.Min(_actorEffectShield[target], damage);
             _actorEffectShield[target] -= fromEffect;
 
@@ -793,17 +978,32 @@ namespace Puckmite.View
         // campaign (design doc 5.5). Enemies are unaffected.
         private int BaseHealth(int actor)
         {
-            return actor == 0 ? _tuning.PlayerBaseHealth + Campaign.BonusMaxHealth : _tuning.EnemyBaseHealth;
+            if (actor == 0)
+            {
+                return _tuning.PlayerBaseHealth + Campaign.BonusMaxHealth;
+            }
+
+            return IsStage1Boss ? _tuning.BossBaseHealth : _tuning.EnemyBaseHealth;
         }
 
         private int BaseAttack(int actor)
         {
-            return actor == 0 ? _tuning.PlayerBaseAttack + Campaign.BonusAttack : _tuning.EnemyBaseAttack;
+            if (actor == 0)
+            {
+                return _tuning.PlayerBaseAttack + Campaign.BonusAttack;
+            }
+
+            return IsStage1Boss ? _tuning.BossBaseAttack : _tuning.EnemyBaseAttack;
         }
 
         private int BaseShield(int actor)
         {
-            return actor == 0 ? _tuning.PlayerBaseShield + Campaign.BonusShield : _tuning.EnemyBaseShield;
+            if (actor == 0)
+            {
+                return _tuning.PlayerBaseShield + Campaign.BonusShield;
+            }
+
+            return IsStage1Boss ? _tuning.BossBaseShield : _tuning.EnemyBaseShield;
         }
 
         private int RunEndHeal()
@@ -815,6 +1015,9 @@ namespace Puckmite.View
 
         // Turn end (design doc 3.5 step 3): lock in the actor's buff from the cells its stones occupy, each
         // cell's value multiplied by that stone's level (design doc 3.7 growth). Held until its next turn.
+        // Per-cell rather than BoardCells.SumBuffs, because boss-corrupted cells count the other way: an
+        // attack cell drains the attack snapshot (it may go negative), and a shield cell costs the
+        // character health right here instead of granting shield.
         private void CaptureActorBuff(int actor)
         {
             if (_actorBuffAttack == null)
@@ -824,6 +1027,7 @@ namespace Puckmite.View
 
             int attack = 0;
             int shield = 0;
+            int healthLoss = 0;
             Vector2 boardMin = _sim.BoardMin;
             Vector2 boardMax = _sim.BoardMax;
             IReadOnlyList<Puck> pucks = _sim.Pucks;
@@ -835,13 +1039,49 @@ namespace Puckmite.View
                     continue;
                 }
 
-                BoardCells.SumBuffs(boardMin, boardMax, p.Position, p.Radius, OccupancyThreshold, out int a, out int s);
-                attack += a * p.Level;
-                shield += s * p.Level;
+                BoardCells.GetOccupiedCells(boardMin, boardMax, p.Position, p.Radius, OccupancyThreshold, _occupiedCells);
+                for (int c = 0; c < _occupiedCells.Count; c++)
+                {
+                    int index = _occupiedCells[c];
+                    int col = index % BoardCells.Size;
+                    int row = index / BoardCells.Size;
+                    if (BoardCells.TypeOf(col, row) != CellType.Buff)
+                    {
+                        continue;
+                    }
+
+                    int gain = BoardCells.BuffValue(col, row) * p.Level;
+                    bool corrupted = _debuffCells.Contains(index);
+                    if (BoardCells.KindOf(col, row) == BuffKind.Attack)
+                    {
+                        attack += corrupted ? -gain : gain;
+                    }
+                    else if (corrupted)
+                    {
+                        healthLoss += gain;
+                    }
+                    else
+                    {
+                        shield += gain;
+                    }
+                }
             }
 
             _actorBuffAttack[actor] = attack;
             _actorEffectShield[actor] = shield; // effect shield refills to the buff amount (design doc 3.6)
+
+            if (healthLoss > 0)
+            {
+                _actorHealth[actor] -= healthLoss;
+                _attackLog = $"{ActorName(actor)} loses {healthLoss} health to corrupted cells.";
+                if (_actorHealth[actor] <= 0)
+                {
+                    _actorHealth[actor] = 0;
+                    KillActor(actor);
+                }
+
+                CheckGameOver();
+            }
         }
 
         // Turn start (design doc 3.6): the actor's buff resets, leaving base stats only until it rolls again.
@@ -868,17 +1108,24 @@ namespace Puckmite.View
 
             MakeQuad("Background", board, Vector2.zero, new Vector2(full, full), new Color(0.16f, 0.17f, 0.20f), 0);
             // Inner 3x3 buff cells, coloured by kind (attack/shield) and brighter toward the stronger centre.
+            // The renderers are kept so UpdateBossEffectVisuals can recolour corrupted ones per frame.
             Vector2 boardMin = new Vector2(-BoardHalf, -BoardHalf);
             Vector2 boardMax = new Vector2(BoardHalf, BoardHalf);
             Vector2 buffCellSize = BoardCells.CellSize(boardMin, boardMax);
+            _buffCellViews = new SpriteRenderer[9];
             for (int row = 1; row <= 3; row++)
             {
                 for (int col = 1; col <= 3; col++)
                 {
                     Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
-                    MakeQuad("BuffCell", board, center, buffCellSize, BuffCellColor(col, row), 1);
+                    _buffCellViews[(row - 1) * 3 + (col - 1)] = MakeQuad("BuffCell", board, center, buffCellSize, BuffCellColor(col, row), 1);
                 }
             }
+
+            // The boss's hole, moved onto whichever cell is open. Above the occupancy highlights (4) so the
+            // pit visibly swallows, below the rings (7+) and stones (10).
+            _holeView = MakeQuad("Hole", board, Vector2.zero, buffCellSize, new Color(0.02f, 0.02f, 0.04f), 5);
+            _holeView.enabled = false;
 
             // Internal cell boundaries (the outermost boundaries are the walls, drawn below).
             float[] gridLines = { -InnerHalf, -2.5f, 2.5f, InnerHalf };
@@ -1098,6 +1345,37 @@ namespace Puckmite.View
             }
         }
 
+        // Corrupted cells wear their warning tint, and the hole quad sits on whichever cell is open.
+        // Recoloured per frame so expiry (boss's next turn) restores the board with no bookkeeping.
+        private void UpdateBossEffectVisuals()
+        {
+            if (_buffCellViews == null)
+            {
+                return;
+            }
+
+            for (int row = 1; row <= 3; row++)
+            {
+                for (int col = 1; col <= 3; col++)
+                {
+                    bool corrupted = _debuffCells.Contains(col + row * BoardCells.Size);
+                    _buffCellViews[(row - 1) * 3 + (col - 1)].color = corrupted ? CorruptCellColor : BuffCellColor(col, row);
+                }
+            }
+
+            int hole = _sim.HoleCell;
+            if (hole >= 0)
+            {
+                Vector2 center = BoardCells.CellCenter(_sim.BoardMin, _sim.BoardMax, hole % BoardCells.Size, hole / BoardCells.Size);
+                _holeView.transform.localPosition = new Vector3(center.x, center.y, 0f);
+                _holeView.enabled = true;
+            }
+            else
+            {
+                _holeView.enabled = false;
+            }
+        }
+
         // Shows a ring behind each stone belonging to the actor whose turn it is, so the player knows which
         // stones are rollable (the three enemies are all red, so colour alone is not enough). Once the roll
         // is spent the rings go out — nothing of this actor's is rollable while its stone is still travelling
@@ -1277,10 +1555,17 @@ namespace Puckmite.View
             ring.enabled = false;
         }
 
-        // Base value, plus the bonus in parentheses when buffed, so the turn-end gain is visible (e.g. "6 (+4)").
+        // Base value, plus the bonus in parentheses when buffed, so the turn-end gain is visible (e.g.
+        // "6 (+4)"). A corrupted-cell debuff shows the same way with its sign (e.g. "-2 (-4)") — the total
+        // is what the attack actually deals, so a click that would HEAL the target is readable beforehand.
         private static string FormatStat(int baseValue, int buff)
         {
-            return buff > 0 ? $"{baseValue + buff} (+{buff})" : baseValue.ToString();
+            if (buff == 0)
+            {
+                return baseValue.ToString();
+            }
+
+            return buff > 0 ? $"{baseValue + buff} (+{buff})" : $"{baseValue + buff} ({buff})";
         }
 
         // --- Game HUD -----------------------------------------------------------------------------
@@ -1332,7 +1617,7 @@ namespace Puckmite.View
         {
             if (_noStoneTurn)
             {
-                return "(no stones to roll)";
+                return _currentActor != 0 && IsStage1Boss ? "(boss is warping the board…)" : "(no stones to roll)";
             }
 
             if (_tuning.EnemyAiEnabled && _currentActor != 0)
@@ -1350,7 +1635,9 @@ namespace Puckmite.View
                 return "(rolling…)";
             }
 
-            return _ghostActive ? "roll a stone, or the new one on your edge" : "roll a highlighted stone";
+            string roll = _ghostActive ? "roll a stone, or the new one on your edge" : "roll a highlighted stone";
+            // The roll-skip is player-only, so only the player's prompt advertises it.
+            return _currentActor == 0 ? roll + " — or click an enemy to attack now" : roll;
         }
     }
 }
