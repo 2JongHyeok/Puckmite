@@ -562,11 +562,13 @@ namespace Puckmite.View
             return _tuning.PuckRadius * RingRadiusScale;
         }
 
-        // Cue-shot aiming: the cursor is pulled back behind the stone and the stone flies the opposite way,
-        // so the launch vector points from the cursor to the stone. Its length is the drag distance.
+        // Aiming (EXPERIMENT, 2026-08-06): the stone flies where the cursor is dragged — the launch vector
+        // points from the stone to the cursor, its length the drag distance. The original pull-back scheme
+        // was the reverse (`puckPosition - cursor`); flip this one line to go back. If this sticks, rename
+        // the method (the "pull-back" name is now a lie) and update the doc/memory rule.
         protected static Vector2 PullbackDrag(Vector2 puckPosition, Vector2 cursor)
         {
-            return puckPosition - cursor;
+            return cursor - puckPosition;
         }
 
         // Closest puck to the point, if within a forgiving grab radius; -1 if the click is in open space.
