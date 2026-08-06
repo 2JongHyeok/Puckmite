@@ -49,6 +49,7 @@ namespace Puckmite.Sim
                 SettleDamageCellsCheck(),
                 BuffKindCheck(),
                 BuffSumCheck(),
+                EnemyPlannerCheck(),
             };
         }
 
@@ -680,6 +681,68 @@ namespace Puckmite.Sim
             string detail =
                 $"centre a{a0}s{s0}(exp2,0), shield a{a1}s{s1}(exp0,1), cross a{a2}s{s2}(exp3,2), damage a{a3}s{s3}(exp0,0).";
             return new CheckResult("Buff sum", passed, detail);
+        }
+
+        /// <summary>The enemy planner is deterministic (same state twice → the same shot) and returns a legal
+        /// action: an own board stone, or the new stone from one of the offered entry spots.</summary>
+        public static CheckResult EnemyPlannerCheck()
+        {
+            EnemyPlan first = PlanSampleScene(out bool foundFirst);
+            EnemyPlan second = PlanSampleScene(out bool foundSecond);
+
+            bool samePlan =
+                first.UseNewStone == second.UseNewStone &&
+                first.StoneId == second.StoneId &&
+                first.EntryPosition == second.EntryPosition &&
+                first.Velocity == second.Velocity &&
+                first.Score == second.Score &&
+                first.CandidatesEvaluated == second.CandidatesEvaluated;
+
+            bool legal = first.UseNewStone
+                ? first.StoneId == 9 && (first.EntryPosition == new Vector2(11f, -6f) || first.EntryPosition == new Vector2(11f, 6f))
+                : first.StoneId == 1;
+
+            bool passed = foundFirst && foundSecond && samePlan && legal;
+            string detail =
+                $"found={foundFirst}, deterministic={samePlan}, legal={legal} " +
+                $"(new={first.UseNewStone}, stone={first.StoneId}, score={first.Score:F3}, candidates={first.CandidatesEvaluated}).";
+            return new CheckResult("Enemy planner", passed, detail);
+        }
+
+        // A small fixed scene for the planner: one enemy stone on the board (id 1), one player stone to hit
+        // (id 0), and a new stone (id 9) offered at two right-edge entry spots.
+        private static EnemyPlan PlanSampleScene(out bool found)
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            sim.AddPuck(new Puck(0, new Vector2(-4f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5 });
+            sim.AddPuck(new Puck(1, new Vector2(4f, 0f), 1.5f, 1f, PuckOwner.Enemy) { Health = 5 });
+
+            Puck template = new Puck(9, Vector2.zero, 1.5f, 1f, PuckOwner.Enemy) { Health = 5 };
+            List<int> ownIds = new List<int> { 1 };
+            List<Vector2> entrySpots = new List<Vector2> { new Vector2(11f, -6f), new Vector2(11f, 6f) };
+            EnemyPlanWeights weights = new EnemyPlanWeights
+            {
+                BuffAttack = 1f,
+                BuffShield = 1f,
+                DamageDealt = 3f,
+                StoneDestroyed = 2f,
+                OwnDamage = 2f,
+                OwnOnDamageCell = 1.5f,
+            };
+
+            // The default-difficulty search: player-equivalent prediction, picking from the top quarter.
+            EnemyPlanConfig config = new EnemyPlanConfig
+            {
+                CueDirections = 16,
+                EntryDirections = 8,
+                PowerFractions = new float[] { 0.4f, 0.7f, 1f },
+                FullRollout = false,
+                PickRank = 0.25f,
+            };
+
+            found = EnemyPlanner.TryPlan(sim, PuckOwner.Enemy, ownIds, true, template, entrySpots, 50f, 0.1f, weights, config, out EnemyPlan plan);
+            return plan;
         }
 
         private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)

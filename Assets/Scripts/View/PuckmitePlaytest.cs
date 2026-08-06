@@ -28,7 +28,6 @@ namespace Puckmite.View
         [SerializeField] private float _powerCurve = 1f;        // drag->power exponent; 1 = linear
         [SerializeField] private float _puckRadius = 1.5f;      // design doc: diameter 3 on a 5-wide cell
         [SerializeField] private int _health = 5;               // stone health (design doc 3~5, 미정); 1..8 via HUD
-        [SerializeField] private float _occupancyThreshold = 0.1f; // cross a cell boundary by this to occupy it (문서 3.2, 임시)
         [SerializeField] private int _cellDamage = 1;              // damage-cell settlement amount (문서 미정, 임시)
 
         [Header("Character stats — temporary placeholders (values are 미정 in the design doc)")]
@@ -42,12 +41,28 @@ namespace Puckmite.View
         [Header("New stone entry")]
         [SerializeField] private float _noStoneTurnDelay = 0.8f; // pause so a stoneless turn is readable
 
+        [Header("Enemy AI — placeholder policy (enemy AI is 미정, design doc 10.2); weights tune the shot scoring")]
+        [SerializeField] private bool _enemyAiEnabled = true;
+        [SerializeField] private int _aiDifficulty = 2;           // 0 아주쉬움 .. 4 매우어려움 (see the preset tables)
+        [SerializeField] private float _enemyThinkDelay = 0.8f;   // pause before the AI fires, so the turn is readable
+        [SerializeField] private float _aiBuffAttackWeight = 1f;  // per point of attack buff the shot ends on
+        [SerializeField] private float _aiBuffShieldWeight = 1f;
+        [SerializeField] private float _aiDamageWeight = 3f;      // per health point dealt to player stones
+        [SerializeField] private float _aiDestroyBonus = 2f;      // per player stone destroyed
+        [SerializeField] private float _aiOwnDamageWeight = 2f;   // per health point its own side loses
+        [SerializeField] private float _aiDamageCellPenalty = 1.5f; // per future settlement health point (scaled by cell damage)
+
         [Header("Playback")]
         [SerializeField] private float _speedMultiplier = 1f;  // sim steps consumed per real second, x1/x2/x4
 
         // Board: 5 cells of side 5 => 25 units across, centred on the origin.
         private const float BoardHalf = 12.5f;
         private const float InnerHalf = 7.5f; // inner 3x3 buff zone spans cells 1..3
+        // How far a stone must cross a cell boundary to occupy it (design doc 3.2, temp 0.1). A constant, not
+        // a tunable: anything at or above the puck radius makes "radius - distance >= threshold" unsatisfiable,
+        // which silently switches off cell occupancy entirely — no highlights, no buffs, no damage-cell settling.
+        private const float OccupancyThreshold = 0.1f;
+
         private const float MinDrag = 0.3f;        // ignore tiny drags so a click does not fling
         private const float MaxAccumulated = 0.1f; // clamp so a hitch cannot trigger a step burst
         private const int MaxStepsPerFrame = 4000;
@@ -71,7 +86,8 @@ namespace Puckmite.View
         // Cell-occupancy highlights: pool cap (6 pucks * up to 4 cells, with margin).
         private const int MaxCellHighlights = 30;
 
-        private static readonly Rect HudRect = new Rect(10f, 10f, 260f, 680f);
+        // Sized to the window so nothing is pushed off screen; the panel scrolls when content outgrows it.
+        private static Rect HudRect => new Rect(10f, 10f, 260f, Screen.height - 20f);
 
         // Highlight rings. Yellow is the default "this is yours to act on", used for the current actor's
         // stones and, during the attack phase, for the attacker and the target under the cursor; the faint
@@ -109,6 +125,7 @@ namespace Puckmite.View
         private SpriteRenderer _previewMarker; // ghost circle at the cue's predicted final position
         private readonly List<Vector3> _previewPoints = new List<Vector3>();
         private float _previewMs; // last preview compute time, shown in the HUD
+        private Vector2 _hudScroll;
 
         private float _accumulator;
         private bool _aiming;
@@ -160,6 +177,31 @@ namespace Puckmite.View
         private bool _noStoneTurn;
         private float _noStoneTimer;
 
+        // Difficulty presets, indexed by _aiDifficulty (0 아주쉬움 .. 4 매우어려움). Aim density rises with
+        // difficulty; the pick drops from mid-ranking shots to the best; only the top tier gets the exact
+        // cascade prediction — everything below sees what the player's preview sees (design doc 8.4).
+        private static readonly string[] AiDifficultyNames = { "V.easy", "Easy", "Normal", "Hard", "V.hard" };
+        private static readonly int[] AiCueDirections = { 8, 12, 16, 24, 24 };
+        private static readonly int[] AiEntryDirections = { 6, 6, 8, 10, 10 };
+        private static readonly float[] AiPickRank = { 0.75f, 0.5f, 0.25f, 0f, 0f };
+        private static readonly bool[] AiFullRollout = { false, false, false, false, true };
+        private static readonly float[][] AiPowerFractions =
+        {
+            new[] { 0.4f, 0.8f },
+            new[] { 0.4f, 0.8f },
+            new[] { 0.4f, 0.7f, 1f },
+            new[] { 0.3f, 0.55f, 0.8f, 1f },
+            new[] { 0.3f, 0.55f, 0.8f, 1f },
+        };
+
+        // Enemy AI: think-pause countdown, then a planner search picks and fires the shot itself.
+        private float _enemyThinkTimer;
+        private float _aiPlanMs;       // last search time, shown in the HUD
+        private int _aiPlanCandidates; // last search size, shown in the HUD
+        private readonly List<int> _planOwnIds = new List<int>();         // reused per plan
+        private readonly List<Vector2> _planEntrySpots = new List<Vector2>();
+        private readonly List<Vector2> _entryScanScratch = new List<Vector2>(); // reused by the edge scan
+
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
         private int _destroyedTotal;
@@ -200,6 +242,17 @@ namespace Puckmite.View
                     _noStoneTurn = false;
                     CaptureActorBuff(_currentActor); // no stones, so this is base stats only
                     BeginAttackPhase();
+                }
+            }
+
+            // An enemy turn drives itself: after a short think pause, search for the best shot and fire it.
+            if (!_gameOver && _enemyAiEnabled && _currentActor != 0 && !_actorDead[_currentActor]
+                && !_hasRolledThisTurn && !_noStoneTurn && !_awaitingAttack && _sim.AllAtRest())
+            {
+                _enemyThinkTimer -= Time.deltaTime;
+                if (_enemyThinkTimer <= 0f)
+                {
+                    ExecuteEnemyPlan();
                 }
             }
 
@@ -403,6 +456,7 @@ namespace Puckmite.View
             _hasRolledThisTurn = false;
             _awaitingAttack = false;
             _noStoneTurn = false;
+            _enemyThinkTimer = _enemyThinkDelay;
             ClearGhost();
 
             for (int step = 0; step < _actorCount; step++)
@@ -456,7 +510,7 @@ namespace Puckmite.View
                 }
             }
 
-            _sim.SettleDamageCells(_settleIds, _cellDamage, _occupancyThreshold);
+            _sim.SettleDamageCells(_settleIds, _cellDamage, OccupancyThreshold);
 
             // SettleDamageCells reports nothing, so the stones it destroyed are the ids it was handed that
             // the sim no longer has. Those go back to their owner's hand (design doc 3.3).
@@ -505,6 +559,13 @@ namespace Puckmite.View
             Vector2 world = ScreenToWorld(screen);
 
             if (_gameOver)
+            {
+                return;
+            }
+
+            // The AI owns the enemies' turns: keep the cursor from grabbing their stones or their ghost.
+            // With the AI off this falls through to the existing hot-seat input.
+            if (_enemyAiEnabled && _currentActor != 0)
             {
                 return;
             }
@@ -1171,7 +1232,7 @@ namespace Puckmite.View
                     continue;
                 }
 
-                BoardCells.SumBuffs(boardMin, boardMax, p.Position, p.Radius, _occupancyThreshold, out int a, out int s);
+                BoardCells.SumBuffs(boardMin, boardMax, p.Position, p.Radius, OccupancyThreshold, out int a, out int s);
                 attack += a * p.Level;
                 shield += s * p.Level;
             }
@@ -1294,21 +1355,30 @@ namespace Puckmite.View
             return false;
         }
 
-        // Whether anywhere along this actor's edge is clear enough to bring a stone in.
-        private bool HasFreeEntrySpot(int actor)
+        // Every clear spot along this actor's edge, scanned at a fixed fine step. This one scan backs both
+        // the turn-start "can a stone come in at all?" gate and the AI's entry candidates — if they sampled
+        // differently, the gate could promise an entry the AI then fails to find, forfeiting a legal roll.
+        private void CollectFreeEntrySpots(int actor, List<Vector2> outSpots)
         {
+            outSpots.Clear();
             float inset = _puckRadius * RingRadiusScale;
             float minY = _sim.BoardMin.y + inset;
             float maxY = _sim.BoardMax.y - inset;
             for (float y = minY; y <= maxY; y += _puckRadius * 0.5f)
             {
-                if (!EntrySpotBlocked(EntryPoint(actor, y)))
+                Vector2 spot = EntryPoint(actor, y);
+                if (!EntrySpotBlocked(spot))
                 {
-                    return true;
+                    outSpots.Add(spot);
                 }
             }
+        }
 
-            return false;
+        // Whether anywhere along this actor's edge is clear enough to bring a stone in.
+        private bool HasFreeEntrySpot(int actor)
+        {
+            CollectFreeEntrySpots(actor, _entryScanScratch);
+            return _entryScanScratch.Count > 0;
         }
 
         // The new stone enters the board where the ghost stands and rolls in the same motion (design doc 3.5).
@@ -1338,6 +1408,10 @@ namespace Puckmite.View
                 _ghostRing.enabled = false;
                 return;
             }
+
+            // Keep the blocked flag honest even on turns where input is locked out (the AI's), where the
+            // aim path that normally refreshes it never runs.
+            _ghostBlocked = EntrySpotBlocked(_ghost.Position);
 
             float diameter = _ghost.Radius * 2f;
             Vector3 position = new Vector3(_ghost.Position.x, _ghost.Position.y, 0f);
@@ -1369,6 +1443,108 @@ namespace Puckmite.View
             }
 
             return _launchReady ? RingLaunchReady : RingStrong;
+        }
+
+        // --- Enemy AI ------------------------------------------------------------------------------
+
+        // Searches the current enemy's candidate shots with EnemyPlanner and fires the best one, exactly as
+        // if a hand had rolled it — the buff capture, attack and turn end all run through the normal flow.
+        private void ExecuteEnemyPlan()
+        {
+            System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            _planOwnIds.Clear();
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if (_actorOf[pucks[i].Id] == _currentActor)
+                {
+                    _planOwnIds.Add(pucks[i].Id);
+                }
+            }
+
+            // A new stone is a candidate from free spots along the entry edge — found with the same scan
+            // StartTurn's gate uses, so a promised entry always yields at least one candidate here, then
+            // thinned to a handful (evenly spaced across the free ones) to bound the search.
+            bool hasNewStone = _handReady[_currentActor].Count > 0;
+            Puck template = default;
+            _planEntrySpots.Clear();
+            if (hasNewStone)
+            {
+                template = new Puck(_handReady[_currentActor][0], Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health };
+
+                const int EntrySpotCount = 5;
+                CollectFreeEntrySpots(_currentActor, _entryScanScratch);
+                if (_entryScanScratch.Count <= EntrySpotCount)
+                {
+                    _planEntrySpots.AddRange(_entryScanScratch);
+                }
+                else
+                {
+                    for (int k = 0; k < EntrySpotCount; k++)
+                    {
+                        int pick = Mathf.RoundToInt((float)k * (_entryScanScratch.Count - 1) / (EntrySpotCount - 1));
+                        _planEntrySpots.Add(_entryScanScratch[pick]);
+                    }
+                }
+
+                hasNewStone = _planEntrySpots.Count > 0;
+            }
+
+            EnemyPlanWeights weights = new EnemyPlanWeights
+            {
+                BuffAttack = _aiBuffAttackWeight,
+                BuffShield = _aiBuffShieldWeight,
+                DamageDealt = _aiDamageWeight,
+                StoneDestroyed = _aiDestroyBonus,
+                OwnDamage = _aiOwnDamageWeight,
+                OwnOnDamageCell = _aiDamageCellPenalty * _cellDamage, // future settlement loss per cell
+            };
+
+            int difficulty = Mathf.Clamp(_aiDifficulty, 0, AiDifficultyNames.Length - 1);
+            EnemyPlanConfig config = new EnemyPlanConfig
+            {
+                CueDirections = AiCueDirections[difficulty],
+                EntryDirections = AiEntryDirections[difficulty],
+                PowerFractions = AiPowerFractions[difficulty],
+                FullRollout = AiFullRollout[difficulty],
+                PickRank = AiPickRank[difficulty],
+            };
+
+            bool planned = EnemyPlanner.TryPlan(
+                _sim, PuckOwner.Enemy, _planOwnIds, hasNewStone, template, _planEntrySpots,
+                _maxPower, OccupancyThreshold, weights, config, out EnemyPlan plan);
+
+            stopwatch.Stop();
+            _aiPlanMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+            _aiPlanCandidates = plan.CandidatesEvaluated;
+
+            if (!planned)
+            {
+                // StartTurn routes turns with nothing to roll to the no-stone path, so this is unexpected.
+                Debug.LogError($"[Puckmite] Enemy AI found no shot for {ActorName(_currentActor)}; ending its turn.");
+                _noStoneTurn = true;
+                _noStoneTimer = 0f;
+                return;
+            }
+
+            if (plan.UseNewStone)
+            {
+                _handReady[_currentActor].Remove(plan.StoneId);
+                Puck stone = template;
+                stone.Position = plan.EntryPosition;
+                stone.Velocity = plan.Velocity;
+                _sim.AddPuck(stone);
+                _xpFillFraction[stone.Id] = -1f; // drop the fill cached for whatever last used this Id
+                ClearGhost();
+            }
+            else
+            {
+                _sim.SetVelocity(plan.StoneId, plan.Velocity);
+            }
+
+            _accumulator = 0f;
+            _hasRolledThisTurn = true; // the normal roll-finished flow takes over from here
         }
 
         // --- Character combat (design doc 3.5 step 4, 3.6, 3.8) --------------------------------------
@@ -1559,7 +1735,7 @@ namespace Puckmite.View
             for (int i = 0; i < pucks.Count && next < _cellHighlights.Length; i++)
             {
                 Puck p = pucks[i];
-                BoardCells.GetOccupiedCells(boardMin, boardMax, p.Position, p.Radius, _occupancyThreshold, _occupiedCells);
+                BoardCells.GetOccupiedCells(boardMin, boardMax, p.Position, p.Radius, OccupancyThreshold, _occupiedCells);
 
                 Color color = OwnerColor(p.Owner);
                 color.a = 0.22f;
@@ -1849,6 +2025,7 @@ namespace Puckmite.View
             }
 
             GUILayout.BeginArea(new Rect(HudRect.x, HudRect.y, HudRect.width, HudRect.height), GUI.skin.box);
+            _hudScroll = GUILayout.BeginScrollView(_hudScroll);
 
             GUILayout.Label("Puckmite Playtest");
             GUILayout.Label(_gameOver ? $"** {_gameOverText} Press Reset. **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
@@ -1858,6 +2035,7 @@ namespace Puckmite.View
             GUILayout.Label($"Destroyed: {_destroyedTotal}");
             GUILayout.Label(_aiming ? $"Power: {_currentPowerFraction * 100f:F0}%" : "Power: -");
             GUILayout.Label($"Preview: {_previewMs:F3} ms");
+            GUILayout.Label($"Enemy AI: {_aiPlanMs:F1} ms, {_aiPlanCandidates} shots");
 
             GUILayout.Space(6f);
             GUILayout.Label($"Friction: {_friction:F1}");
@@ -1878,8 +2056,6 @@ namespace Puckmite.View
             _powerCurve = GUILayout.HorizontalSlider(_powerCurve, 0.3f, 3f);
             GUILayout.Label($"Max health: {_health}");
             _health = Mathf.RoundToInt(GUILayout.HorizontalSlider(_health, 1f, 8f));
-            GUILayout.Label($"Occupancy threshold: {_occupancyThreshold:F2}");
-            _occupancyThreshold = GUILayout.HorizontalSlider(_occupancyThreshold, 0.1f, 2f);
             GUILayout.Label($"Cell damage: {_cellDamage}");
             _cellDamage = Mathf.RoundToInt(GUILayout.HorizontalSlider(_cellDamage, 1f, 5f));
 
@@ -1900,12 +2076,33 @@ namespace Puckmite.View
             }
             GUILayout.EndHorizontal();
 
+            if (GUILayout.Button(_enemyAiEnabled ? "Enemy AI: ON" : "Enemy AI: OFF (hot-seat)"))
+            {
+                _enemyAiEnabled = !_enemyAiEnabled;
+                _aiming = false; // drop any drag in progress so a mid-aim toggle cannot leave a stale shot
+                _aimingPuckId = -1;
+                HidePreview();
+            }
+
+            // Difficulty row: the pressed-looking toggle is the current tier.
+            GUILayout.BeginHorizontal();
+            for (int i = 0; i < AiDifficultyNames.Length; i++)
+            {
+                bool selected = i == Mathf.Clamp(_aiDifficulty, 0, AiDifficultyNames.Length - 1);
+                if (GUILayout.Toggle(selected, AiDifficultyNames[i], GUI.skin.button) && !selected)
+                {
+                    _aiDifficulty = i;
+                }
+            }
+            GUILayout.EndHorizontal();
+
             if (GUILayout.Button("Reset pucks"))
             {
                 ResetPucks();
             }
 
             GUILayout.Label("Click a puck, drag and release to fling it.");
+            GUILayout.EndScrollView();
             GUILayout.EndArea();
         }
 
@@ -1915,6 +2112,11 @@ namespace Puckmite.View
             if (_noStoneTurn)
             {
                 return "(no stones to roll)";
+            }
+
+            if (_enemyAiEnabled && _currentActor != 0)
+            {
+                return _hasRolledThisTurn ? "(rolling…)" : "(enemy thinking…)";
             }
 
             if (_awaitingAttack)
