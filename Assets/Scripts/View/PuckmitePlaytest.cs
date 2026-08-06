@@ -212,7 +212,10 @@ namespace Puckmite.View
 
         private int _stage = 1;
         private int _run = 1;
-        private int _carriedPlayerHealth;   // health the player brings into the current run
+        // Two separate values on purpose: restarting the current run must give back what the player walked
+        // in with, not the healed total earned by clearing it — otherwise the run-end heal can be re-earned.
+        private int _runStartHealth;  // health the player entered the CURRENT run with (0 = full)
+        private int _nextRunHealth;   // healed total to carry into the NEXT run, set when a run is cleared
         private bool _runCleared;           // run won: waiting on the next-run button (the shop's slot)
         private bool _campaignCleared;
 
@@ -437,19 +440,6 @@ namespace Puckmite.View
                 _accumulator -= PuckSim.Dt;
                 steps++;
             }
-        }
-
-        private void ResetPucks()
-        {
-            BuildSimFrom(new List<Puck>()); // the board starts empty; every stone enters from a hand
-            AssignActors();
-            ResetCombatState();
-            _accumulator = 0f;
-            _wallBounceTotal = 0;
-            _collisionTotal = 0;
-            _destroyedTotal = 0;
-            StartTurn();
-            UpdatePuckTransforms();
         }
 
         // Assigns each puck to a turn actor from the fixed roster: the player is actor 0 (owns all its
@@ -1611,8 +1601,8 @@ namespace Puckmite.View
         {
             for (int actor = 0; actor < _actorCount; actor++)
             {
-                _actorHealth[actor] = actor == 0 && _carriedPlayerHealth > 0
-                    ? Mathf.Min(_carriedPlayerHealth, BaseHealth(actor))
+                _actorHealth[actor] = actor == 0 && _runStartHealth > 0
+                    ? Mathf.Min(_runStartHealth, BaseHealth(actor))
                     : BaseHealth(actor);
                 _actorBaseShield[actor] = BaseShield(actor);
                 _actorEffectShield[actor] = 0;
@@ -1754,8 +1744,11 @@ namespace Puckmite.View
         {
             _gameOver = true;
             _runCleared = true;
-            _carriedPlayerHealth = Mathf.Min(_actorHealth[0] + _runEndHeal, BaseHealth(0));
-            _actorHealth[0] = _carriedPlayerHealth;
+
+            // Only the next run's figure moves; _runStartHealth stays put so restarting this run is still
+            // worth what it was. AdvanceRun is what promotes it.
+            _nextRunHealth = Mathf.Min(_actorHealth[0] + _runEndHeal, BaseHealth(0));
+            _actorHealth[0] = _nextRunHealth; // shown healed on the cleared board
 
             bool lastRun = IsBossRun;
             if (lastRun && _stage >= StageCount)
@@ -1766,8 +1759,8 @@ namespace Puckmite.View
             }
 
             _gameOverText = lastRun
-                ? $"Stage {_stage} cleared. Healed to {_carriedPlayerHealth}."
-                : $"Run {_stage}-{_run} cleared. Healed to {_carriedPlayerHealth}.";
+                ? $"Stage {_stage} cleared. Healed to {_nextRunHealth}."
+                : $"Run {_stage}-{_run} cleared. Healed to {_nextRunHealth}.";
         }
 
         // Moves to the next run (or the next stage) and builds it.
@@ -1783,6 +1776,7 @@ namespace Puckmite.View
                 _run++;
             }
 
+            _runStartHealth = _nextRunHealth; // the healed total becomes what the next run starts from
             _runCleared = false;
             Build();
         }
@@ -1792,7 +1786,8 @@ namespace Puckmite.View
         {
             _stage = 1;
             _run = 1;
-            _carriedPlayerHealth = 0; // start the first run at full health
+            _runStartHealth = 0; // start the first run at full health
+            _nextRunHealth = 0;
             _runCleared = false;
             _campaignCleared = false;
             Build();
@@ -2239,9 +2234,12 @@ namespace Puckmite.View
             }
             GUILayout.EndHorizontal();
 
-            if (GUILayout.Button("Restart this run"))
+            // Hidden once the run is decided: from there the run-cleared / defeat buttons above are the only
+            // way on, so this cannot wipe a win or hand out the run-end heal twice. Build() is the single
+            // rebuild path — it re-sizes the Id-indexed view arrays for the roster, which a partial reset did not.
+            if (!_gameOver && GUILayout.Button("Restart this run"))
             {
-                ResetPucks();
+                Build();
             }
 
             GUILayout.Label("Click a puck, drag and release to fling it.");
