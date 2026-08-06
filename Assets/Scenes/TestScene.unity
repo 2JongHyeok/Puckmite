@@ -158,7 +158,35 @@ MonoBehaviour:
   _powerCurve: 1
   _puckRadius: 1.5
   _health: 5
-  _occupancyThreshold: 0.3
+  _cellDamage: 1
+  _playerBaseHealth: 20
+  _playerBaseAttack: 2
+  _playerBaseShield: 0
+  _enemyBaseHealth: 10
+  _enemyBaseAttack: 1
+  _enemyBaseShield: 0
+  _runEndHeal: 5
+  _playerStoneCount: 2
+  _goldPerKill: 10
+  _shopStonesPerVisit: 1
+  _priceAttack: 5
+  _priceShield: 5
+  _priceRunHeal: 5
+  _priceMaxHealth: 10
+  _gainAttack: 1
+  _gainShield: 2
+  _gainRunHeal: 2
+  _gainMaxHealth: 5
+  _noStoneTurnDelay: 0.8
+  _enemyAiEnabled: 1
+  _aiDifficulty: 2
+  _enemyThinkDelay: 0.8
+  _aiBuffAttackWeight: 1
+  _aiBuffShieldWeight: 1
+  _aiDamageWeight: 3
+  _aiDestroyBonus: 2
+  _aiOwnDamageWeight: 2
+  _aiDamageCellPenalty: 1.5
   _speedMultiplier: 1
 --- !u!4 &339425072
 Transform:

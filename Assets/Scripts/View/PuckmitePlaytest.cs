@@ -1337,7 +1337,11 @@ namespace Puckmite.View
                     continue; // the player's own stones are not part of this link
                 }
 
-                if ((p.Position - world).magnitude <= p.Radius * RingRadiusScale)
+                // The drawn circle exactly, not the ring's reach: the sim separates stones to a full
+                // diameter apart, so discs of this radius can never both contain the cursor. That makes the
+                // first match the only match — no nearest-wins tie-break needed, and the highlight lands on
+                // the stone the cursor is visibly on.
+                if ((p.Position - world).magnitude <= p.Radius)
                 {
                     return owner;
                 }
@@ -2281,7 +2285,7 @@ namespace Puckmite.View
             }
 
             Vector2 screen = mouse.position.ReadValue();
-            if (PointerOverHud(screen))
+            if (PointerOverShopGui(screen))
             {
                 return;
             }
@@ -2313,12 +2317,11 @@ namespace Puckmite.View
             }
 
             Vector2 screen = mouse.position.ReadValue();
-            if (PointerOverHud(screen))
-            {
-                return;
-            }
-
             Vector2 world = ScreenToWorld(screen);
+
+            // Only presses are withheld over the shop's own controls. Releases must always be seen, or a
+            // shot let go over a panel would leave the aim armed and fire on the next click.
+            bool overGui = PointerOverShopGui(screen);
 
             if (_hasPendingCell)
             {
@@ -2329,7 +2332,7 @@ namespace Puckmite.View
                     return;
                 }
 
-                if (mouse.leftButton.wasPressedThisFrame && ShopCellAt(world, out int col, out int row))
+                if (mouse.leftButton.wasPressedThisFrame && !overGui && ShopCellAt(world, out int col, out int row))
                 {
                     PlacePendingCell(col, row);
                 }
@@ -2337,7 +2340,7 @@ namespace Puckmite.View
                 return;
             }
 
-            if (mouse.leftButton.wasPressedThisFrame && !_shopThrowing
+            if (mouse.leftButton.wasPressedThisFrame && !overGui && !_shopThrowing
                 && (world - new Vector2(MerchantX, 0f)).magnitude <= MerchantRadius)
             {
                 _merchantOpen = true;
@@ -2351,7 +2354,7 @@ namespace Puckmite.View
 
             UpdateGhostAim(world);
 
-            if (mouse.leftButton.wasPressedThisFrame && GhostVisible() && !_ghostBlocked
+            if (mouse.leftButton.wasPressedThisFrame && !overGui && GhostVisible() && !_ghostBlocked
                 && (world - _ghost.Position).magnitude <= GrabRadius())
             {
                 _aiming = true;
@@ -2774,6 +2777,16 @@ namespace Puckmite.View
         {
             GUIStyle rich = new GUIStyle(GUI.skin.label) { richText = true };
 
+            // The merchant screen is modal, and IMGUI has no z-order: a control drawn earlier still takes
+            // the click even when something is painted over it. So while the merchant is up, nothing else
+            // is drawn at all — otherwise a miss near its Close button would hit "Roll stones" or "Leave
+            // shop" underneath, both of which end the visit for good.
+            if (_merchantOpen)
+            {
+                DrawMerchantScreen(rich);
+                return;
+            }
+
             // Gold, top right (design doc 5.6: it carries between shops).
             GUI.Label(new Rect(Screen.width - 170f, 12f, 160f, 24f), $"<b>Gold {_gold}</b>", rich);
 
@@ -2800,22 +2813,36 @@ namespace Puckmite.View
             GUI.Button(new Rect(x, 150f, 170f, 34f), "Add stone (next step)");
             GUI.enabled = true;
 
-            if (GUI.Button(new Rect(x, 210f, 170f, 34f), "Leave shop"))
+            // Settlement reads where the stones ARE, so leaving mid-flight would freeze them wherever they
+            // happened to be that frame. The way out only opens once the board has settled.
+            bool settled = _sim.AllAtRest();
+            GUI.enabled = settled;
+            if (GUI.Button(new Rect(x, 210f, 170f, 34f), settled ? "Leave shop" : "Stones rolling…"))
             {
                 LeaveShop();
                 return;
             }
+            GUI.enabled = true;
 
             if (_hasPendingCell)
             {
                 GUI.Label(new Rect(x, 254f, 190f, 40f),
                     $"Placing {UpgradeName(_pendingCell)}\nright-click to cancel", rich);
             }
+        }
 
-            if (_merchantOpen)
+        // The rects DrawShopGui actually occupies. The battle HUD panel is not drawn in shop mode, so board
+        // clicks must not be blocked by its rect — doing that left an invisible dead strip down the left,
+        // right where the merchant stands.
+        private bool PointerOverShopGui(Vector2 screen)
+        {
+            float guiY = Screen.height - screen.y; // Mouse.position is y-up; GUI rects are y-down
+            if (guiY <= 70f)
             {
-                DrawMerchantScreen(rich);
+                return true; // gold, stone count and the log along the top
             }
+
+            return screen.x >= Screen.width - 200f && guiY <= 300f; // right-hand control column
         }
 
         // The merchant's screen: three cells on the table, a reroll button, and a close button. It covers
