@@ -38,6 +38,10 @@ namespace Puckmite.View
         [SerializeField] private int _enemyBaseAttack = 1;
         [SerializeField] private int _enemyBaseShield = 0;
 
+        [Header("Progression — 놀이터 임시 (런 종료 회복량은 10.1에서 미정)")]
+        [SerializeField] private int _runEndHeal = 5;      // health restored after clearing a run (design doc 2.1)
+        [SerializeField] private int _playerStoneCount = 2; // design doc 3.3: the player starts with 2
+
         [Header("New stone entry")]
         [SerializeField] private float _noStoneTurnDelay = 0.8f; // pause so a stoneless turn is readable
 
@@ -200,6 +204,18 @@ namespace Puckmite.View
         private readonly List<Vector2> _planEntrySpots = new List<Vector2>();
         private readonly List<Vector2> _entryScanScratch = new List<Vector2>(); // reused by the edge scan
 
+        // Progression (design doc 2.1): 3 stages of 5 runs, enemy counts fixed per run, shop between runs
+        // (step 13 — the "next run" button stands in its slot for now). Only the player's health carries
+        // across runs; base shield, stone levels and the board are all run-scoped.
+        private const int StageCount = 3;
+        private static readonly int[] RunEnemyCounts = { 1, 1, 2, 3, 1 }; // last is the boss run (boss itself: step 14)
+
+        private int _stage = 1;
+        private int _run = 1;
+        private int _carriedPlayerHealth;   // health the player brings into the current run
+        private bool _runCleared;           // run won: waiting on the next-run button (the shop's slot)
+        private bool _campaignCleared;
+
         private int _wallBounceTotal; // session tallies, straight from Step()'s events
         private int _collisionTotal;
         private int _destroyedTotal;
@@ -295,21 +311,29 @@ namespace Puckmite.View
 
         // --- Simulation ---------------------------------------------------------------------------
 
-        // Every stone in the match, by Id and team. The match starts with an EMPTY board (design doc 3.3/3.4):
-        // these all begin in their owner's hand and enter one at a time from the entry edge, so the roster
-        // carries no board position. Ids are contiguous from 0 because the view arrays are indexed by Id.
-        // Player count is the design doc's 2; the enemies get one each (per-enemy counts are 미정, 10.1).
+        // Every stone in the current run, by Id and team. A run starts with an EMPTY board (design doc
+        // 3.3/3.4): these all begin in their owner's hand and enter one at a time from the entry edge, so
+        // the roster carries no board position. Ids are contiguous from 0 because the view arrays are
+        // indexed by Id. The enemy count is the run's (design doc 2.1); each enemy gets one stone, since
+        // per-enemy counts are 미정 (10.1).
         private List<Puck> InitialRoster()
         {
-            return new List<Puck>
+            List<Puck> roster = new List<Puck>();
+            for (int i = 0; i < _playerStoneCount; i++)
             {
-                new Puck(0, Vector2.zero, _puckRadius, 1f, PuckOwner.Player) { Health = _health },
-                new Puck(1, Vector2.zero, _puckRadius, 1f, PuckOwner.Player) { Health = _health },
-                new Puck(2, Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
-                new Puck(3, Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
-                new Puck(4, Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health },
-            };
+                roster.Add(new Puck(roster.Count, Vector2.zero, _puckRadius, 1f, PuckOwner.Player) { Health = _health });
+            }
+
+            int enemies = RunEnemyCounts[Mathf.Clamp(_run - 1, 0, RunEnemyCounts.Length - 1)];
+            for (int i = 0; i < enemies; i++)
+            {
+                roster.Add(new Puck(roster.Count, Vector2.zero, _puckRadius, 1f, PuckOwner.Enemy) { Health = _health });
+            }
+
+            return roster;
         }
+
+        private bool IsBossRun => _run == RunEnemyCounts.Length;
 
         private static int RosterMaxId(List<Puck> roster)
         {
@@ -535,9 +559,16 @@ namespace Puckmite.View
             return false;
         }
 
-        private static string ActorName(int actor)
+        private string ActorName(int actor)
         {
-            return actor == 0 ? "Player" : $"Enemy {actor}";
+            if (actor == 0)
+            {
+                return "Player";
+            }
+
+            // The boss run fields a single enemy (design doc 2.1); its stats are still an ordinary enemy's
+            // until the boss itself is built, so this is a label and nothing more.
+            return IsBossRun ? "Boss" : $"Enemy {actor}";
         }
 
         // --- Input --------------------------------------------------------------------------------
@@ -1573,12 +1604,16 @@ namespace Puckmite.View
 
         // --- Character combat (design doc 3.5 step 4, 3.6, 3.8) --------------------------------------
 
-        // Restores every character to full: health, base shield pool, no buffs, nobody down, game on.
+        // Sets every character up for the run about to start: enemies come in fresh, the player brings the
+        // health it left the last run with (design doc 2.1), and the base shield pool refills — it is
+        // run-scoped, not match-scoped (design doc 3.6).
         private void ResetCombatState()
         {
             for (int actor = 0; actor < _actorCount; actor++)
             {
-                _actorHealth[actor] = BaseHealth(actor);
+                _actorHealth[actor] = actor == 0 && _carriedPlayerHealth > 0
+                    ? Mathf.Min(_carriedPlayerHealth, BaseHealth(actor))
+                    : BaseHealth(actor);
                 _actorBaseShield[actor] = BaseShield(actor);
                 _actorEffectShield[actor] = 0;
                 _actorBuffAttack[actor] = 0;
@@ -1597,6 +1632,8 @@ namespace Puckmite.View
 
             _awaitingAttack = false;
             _gameOver = false;
+            _runCleared = false;
+            _campaignCleared = false;
             _gameOverText = "";
             _attackLog = "";
             _noStoneTurn = false;
@@ -1686,13 +1723,14 @@ namespace Puckmite.View
             }
         }
 
-        // Design doc 3.8: every enemy down wins the match, the player going down ends it.
+        // Design doc 3.8: every enemy down clears the run, the player going down ends the campaign — and
+        // there is no continue, so that means starting over from stage 1 (design doc 2.1).
         private void CheckGameOver()
         {
             if (_actorDead[0])
             {
                 _gameOver = true;
-                _gameOverText = "Defeat — the player is down.";
+                _gameOverText = $"Defeat on stage {_stage}-{_run}.";
                 return;
             }
 
@@ -1704,8 +1742,65 @@ namespace Puckmite.View
                 }
             }
 
+            ClearRun();
+        }
+
+        // --- Progression (design doc 2.1) -----------------------------------------------------------
+
+        // Run won: the player heals a set amount and carries that health into the next run. The board waits
+        // on the next-run button — the slot the shop will take (design doc 2.1: it opens straight away and
+        // cannot be skipped).
+        private void ClearRun()
+        {
             _gameOver = true;
-            _gameOverText = "Victory — every enemy is down.";
+            _runCleared = true;
+            _carriedPlayerHealth = Mathf.Min(_actorHealth[0] + _runEndHeal, BaseHealth(0));
+            _actorHealth[0] = _carriedPlayerHealth;
+
+            bool lastRun = IsBossRun;
+            if (lastRun && _stage >= StageCount)
+            {
+                _campaignCleared = true;
+                _gameOverText = "All stages cleared.";
+                return;
+            }
+
+            _gameOverText = lastRun
+                ? $"Stage {_stage} cleared. Healed to {_carriedPlayerHealth}."
+                : $"Run {_stage}-{_run} cleared. Healed to {_carriedPlayerHealth}.";
+        }
+
+        // Moves to the next run (or the next stage) and builds it.
+        private void AdvanceRun()
+        {
+            if (IsBossRun)
+            {
+                _stage++;
+                _run = 1;
+            }
+            else
+            {
+                _run++;
+            }
+
+            _runCleared = false;
+            Build();
+        }
+
+        // No continue, no permanent unlocks (design doc 2.1): a defeat restarts the whole campaign.
+        private void RestartCampaign()
+        {
+            _stage = 1;
+            _run = 1;
+            _carriedPlayerHealth = 0; // start the first run at full health
+            _runCleared = false;
+            _campaignCleared = false;
+            Build();
+        }
+
+        private string RunLabel()
+        {
+            return IsBossRun ? $"Stage {_stage}-{_run} (Boss)" : $"Stage {_stage}-{_run}";
         }
 
         // The character whose body circle covers the point, or -1. Used to pick an attack target.
@@ -2051,8 +2146,32 @@ namespace Puckmite.View
             GUILayout.BeginArea(new Rect(HudRect.x, HudRect.y, HudRect.width, HudRect.height), GUI.skin.box);
             _hudScroll = GUILayout.BeginScrollView(_hudScroll);
 
-            GUILayout.Label("Puckmite Playtest");
-            GUILayout.Label(_gameOver ? $"** {_gameOverText} Press Reset. **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
+            GUILayout.Label($"Puckmite Playtest — {RunLabel()}");
+            GUILayout.Label(_gameOver ? $"** {_gameOverText} **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
+
+            if (_campaignCleared)
+            {
+                if (GUILayout.Button("Start over"))
+                {
+                    RestartCampaign();
+                }
+            }
+            else if (_runCleared)
+            {
+                // The shop will take this slot (design doc 2.1: straight after a run, not skippable).
+                if (GUILayout.Button("Next run  ▶"))
+                {
+                    AdvanceRun();
+                }
+            }
+            else if (_gameOver)
+            {
+                if (GUILayout.Button("Restart from stage 1"))
+                {
+                    RestartCampaign();
+                }
+            }
+
             GUILayout.Label(_attackLog.Length > 0 ? _attackLog : "No attack yet.");
             GUILayout.Label($"Pucks: {_sim.Pucks.Count}    At rest: {_sim.AllAtRest()}");
             GUILayout.Label($"Wall bounces: {_wallBounceTotal}    Collisions: {_collisionTotal}");
@@ -2120,7 +2239,7 @@ namespace Puckmite.View
             }
             GUILayout.EndHorizontal();
 
-            if (GUILayout.Button("Reset pucks"))
+            if (GUILayout.Button("Restart this run"))
             {
                 ResetPucks();
             }
