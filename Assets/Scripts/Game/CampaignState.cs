@@ -29,6 +29,11 @@ namespace Puckmite.Game
         public int BonusShield;
         public int BonusRunHeal;
         public int BonusMaxHealth;
+
+        // Battle stones bought in shops (design doc 5.6): one more roster stone from the next run, for the
+        // rest of the campaign. Completely separate from per-visit shop stones (design doc 5.4).
+        public int ExtraBattleStones;
+
         public readonly ShopBoard ShopBoard = new ShopBoard();
 
         public bool IsBossRun => Run == RunEnemyCounts.Length;
@@ -81,6 +86,7 @@ namespace Puckmite.Game
             BonusShield = 0;
             BonusRunHeal = 0;
             BonusMaxHealth = 0;
+            ExtraBattleStones = 0;
             ShopBoard.Clear();
         }
     }

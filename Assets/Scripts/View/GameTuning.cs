@@ -46,6 +46,11 @@ namespace Puckmite.View
         public int GainShield = 2;
         public int GainRunHeal = 2;
         public int GainMaxHealth = 5;
+        public int ShopStonePrice = 15;        // extra shop stone, this visit only (design doc 5.4)
+        public int RerollBasePrice = 5;        // the visit's first reroll (design doc 5.3)
+        public int RerollPriceStep = 5;        // added on top per reroll already taken this visit
+        [Range(0f, 1f)] public float BattleStoneChance = 0.1f; // per-slot odds an offer is a battle stone (design doc 5.3)
+        public int BattleStonePrice = 25;      // battle stone: +1 roster stone until defeat (design doc 5.6)
 
         [Header("New stone entry")]
         public float NoStoneTurnDelay = 0.8f; // pause so a stoneless turn is readable

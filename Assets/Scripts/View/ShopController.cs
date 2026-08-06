@@ -26,19 +26,40 @@ namespace Puckmite.View
         private SpriteRenderer _merchantView;
         private SpriteRenderer _pendingCellGhost;
 
+        // One merchant slot: an upgrade cell, or (rarely) a battle stone in the same slot (design doc 5.3).
+        private enum OfferType
+        {
+            Cell,
+            BattleStone,
+        }
+
+        private struct ShopOffer
+        {
+            public OfferType Type;
+            public UpgradeKind Kind; // meaningful only while Type == Cell
+        }
+
         private bool _merchantOpen;
         private bool _shopThrowing;          // the roll button was pressed: no more buying, stones may fly
         private int _shopStonesLeft;
         private int _shopStonesTotal;
-        private readonly List<UpgradeKind?> _shopOffers = new List<UpgradeKind?>();
+        private readonly List<ShopOffer?> _shopOffers = new List<ShopOffer?>(); // null = sold until a reroll
+        private int _rerollCount;            // rerolls taken this visit; the price climbs with it (design doc 5.3)
         private bool _hasPendingCell;        // a bought cell is riding the cursor, waiting to be placed
         private UpgradeKind _pendingCell;
         private int _pendingSlot = -1;
         private string _shopLog = "";
 
-        // Deterministic offer rotation stands in for the real draw (rarity and the battle-stone offer are
-        // design doc 5.3, step 13b).
-        private int _offerCursor;
+        // Replace warning (design doc 5.1): a different kind wipes the cell's levels, so the placement
+        // waits here for OK/cancel instead of landing straight away.
+        private bool _confirmReplaceOpen;
+        private int _confirmCol;
+        private int _confirmRow;
+
+        // The view arrays are sized once per Build and never grow (see ArenaControllerBase), so the roster
+        // is pre-sized for every stone this visit could possibly field: the granted ones plus as many as
+        // the entry gold could buy. Gold cannot rise inside a shop, so this is a hard upper bound.
+        private int _stoneCapacity;
 
         private static CampaignState Campaign => GameFlow.Campaign;
 
@@ -52,6 +73,7 @@ namespace Puckmite.View
             {
                 _shopStonesTotal = Mathf.Max(1, _tuning.ShopStonesPerVisit);
                 _shopStonesLeft = _shopStonesTotal;
+                _stoneCapacity = _shopStonesTotal + Campaign.Gold / Mathf.Max(1, _tuning.ShopStonePrice);
                 _shopLog = "";
                 RerollOffers();
             }
@@ -71,10 +93,12 @@ namespace Puckmite.View
         }
 
         // On the upgrade board there is only the player, throwing this visit's shop stones (design doc 5.4).
+        // Sized to capacity, not to the granted count: stones bought mid-visit must slot into view arrays
+        // that were allocated at Build, since rebuilding (a scene reload) would wipe the thrown stones.
         protected override List<Puck> InitialRoster()
         {
             List<Puck> roster = new List<Puck>();
-            for (int i = 0; i < Mathf.Max(1, _shopStonesTotal); i++)
+            for (int i = 0; i < Mathf.Max(1, _stoneCapacity); i++)
             {
                 roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Player) { Health = _tuning.StoneHealth });
             }
@@ -131,14 +155,28 @@ namespace Puckmite.View
             GameFlow.LoadBattle();
         }
 
-        // Fills every slot afresh, bought-out ones included.
+        // Fills every slot afresh, bought-out ones included (design doc 5.3). The draw is view-level
+        // UnityEngine.Random — the sim's determinism is untouched.
         private void RerollOffers()
         {
             _shopOffers.Clear();
             for (int i = 0; i < ShopOfferSlots; i++)
             {
-                _shopOffers.Add((UpgradeKind)(_offerCursor++ % 4));
+                if (Random.value < _tuning.BattleStoneChance)
+                {
+                    _shopOffers.Add(new ShopOffer { Type = OfferType.BattleStone });
+                }
+                else
+                {
+                    _shopOffers.Add(new ShopOffer { Type = OfferType.Cell, Kind = (UpgradeKind)Random.Range(0, 4) });
+                }
             }
+        }
+
+        // What the next reroll costs: the price climbs with every reroll taken this visit (design doc 5.3).
+        private int RerollPrice()
+        {
+            return _tuning.RerollBasePrice + _tuning.RerollPriceStep * _rerollCount;
         }
 
         private int PriceOf(UpgradeKind kind)
@@ -188,12 +226,12 @@ namespace Puckmite.View
         // Picking an affordable cell closes the merchant and hands it to the cursor to place on the board.
         private void BuyCell(int slot)
         {
-            if (!_shopOffers[slot].HasValue)
+            if (!_shopOffers[slot].HasValue || _shopOffers[slot].Value.Type != OfferType.Cell)
             {
                 return;
             }
 
-            UpgradeKind kind = _shopOffers[slot].Value;
+            UpgradeKind kind = _shopOffers[slot].Value.Kind;
             if (Campaign.Gold < PriceOf(kind) || _shopThrowing)
             {
                 return;
@@ -205,9 +243,69 @@ namespace Puckmite.View
             _merchantOpen = false;
         }
 
-        // Places the carried cell on the board cell under the cursor and charges for it. Stacking the same
-        // kind raises that cell; a different kind replaces it and its levels are lost (design doc 5.1).
+        // A battle stone lands in the campaign, not on this board: one more roster stone from the next run
+        // until defeat (design doc 5.6). Nothing to place, so the merchant screen stays open.
+        private void BuyBattleStone(int slot)
+        {
+            if (Campaign.Gold < _tuning.BattleStonePrice || _shopThrowing)
+            {
+                return;
+            }
+
+            Campaign.Gold -= _tuning.BattleStonePrice;
+            Campaign.ExtraBattleStones++;
+            _shopOffers[slot] = null; // that slot is spent until a reroll
+            _shopLog = "Battle stone bought — one more stone from the next run.";
+        }
+
+        // An extra stone for this visit only (design doc 5.4): paid, straight into the hand, and up onto
+        // the entry edge if the throwing phase is already on and no stone is waiting there.
+        private void BuyStone()
+        {
+            // The capacity guard backs the affordability check: ShopStonePrice is live-tunable, so a price
+            // lowered mid-visit could otherwise afford more stones than the view arrays were sized for.
+            if (Campaign.Gold < _tuning.ShopStonePrice || _shopStonesTotal >= _stoneCapacity)
+            {
+                return;
+            }
+
+            Campaign.Gold -= _tuning.ShopStonePrice;
+            int id = _shopStonesTotal; // roster ids run 0..capacity-1; this is the next unused one
+            _shopStonesTotal++;
+            _shopStonesLeft++;
+            _handReady[0].Add(id);
+            _shopLog = "Stone bought for this visit.";
+
+            if (_shopThrowing && !_ghostActive)
+            {
+                SetupGhost(0);
+            }
+        }
+
+        // Places the carried cell on the board cell under the cursor. Stacking the same kind raises that
+        // cell; a different kind wipes its levels, which the player has to confirm first (design doc 5.1),
+        // so that case parks the placement in the confirm dialog instead of landing it.
         private void PlacePendingCell(int col, int row)
+        {
+            if (Campaign.Gold < PriceOf(_pendingCell))
+            {
+                return;
+            }
+
+            if (Campaign.ShopBoard.Preview(col, row, _pendingCell) == ShopPlacement.Replaced)
+            {
+                _confirmReplaceOpen = true;
+                _confirmCol = col;
+                _confirmRow = row;
+                return;
+            }
+
+            CommitPendingCell(col, row);
+        }
+
+        // The charge and the placement proper — reached directly for empty/same-kind cells, or through the
+        // confirm dialog's OK for a replacement.
+        private void CommitPendingCell(int col, int row)
         {
             int price = PriceOf(_pendingCell);
             if (Campaign.Gold < price)
@@ -353,7 +451,7 @@ namespace Puckmite.View
             }
 
             _pendingCellGhost.enabled = false;
-            if (!_hasPendingCell || _merchantOpen)
+            if (!_hasPendingCell || _merchantOpen || _confirmReplaceOpen)
             {
                 return;
             }
@@ -392,9 +490,9 @@ namespace Puckmite.View
             _launchReady = false;
 
             Mouse mouse = Mouse.current;
-            if (mouse == null || _merchantOpen)
+            if (mouse == null || _merchantOpen || _confirmReplaceOpen)
             {
-                return;
+                return; // both screens are modal: the board must not take clicks through them
             }
 
             Vector2 screen = mouse.position.ReadValue();
@@ -544,10 +642,17 @@ namespace Puckmite.View
 
             GUIStyle rich = new GUIStyle(GUI.skin.label) { richText = true };
 
-            // The merchant screen is modal, and IMGUI has no z-order: a control drawn earlier still takes
-            // the click even when something is painted over it. So while the merchant is up, nothing else
-            // is drawn at all — otherwise a miss near its Close button would hit "Roll stones" or "Leave
-            // shop" underneath, both of which end the visit for good.
+            // Modal screens, and IMGUI has no z-order: a control drawn earlier still takes the click even
+            // when something is painted over it. So while one is up, nothing else is drawn at all —
+            // otherwise a miss near its buttons would hit "Roll stones" or "Leave shop" underneath, both
+            // of which end the visit for good. The replace warning outranks the merchant: it can only be
+            // open while the merchant is closed, but check it first all the same.
+            if (_confirmReplaceOpen)
+            {
+                DrawReplaceConfirm(rich);
+                return;
+            }
+
             if (_merchantOpen)
             {
                 DrawMerchantScreen(rich);
@@ -575,10 +680,15 @@ namespace Puckmite.View
             }
             GUI.enabled = true;
 
-            // Buying extra stones is design doc 5.4 — wired up in step 13b, shown disabled for now.
-            GUI.enabled = false;
-            GUI.Button(new Rect(x, 150f, 170f, 34f), "Add stone (next step)");
+            // An extra stone for this visit (design doc 5.4): always shown, roll phase or not, greyed out
+            // only while it cannot be paid for.
+            GUI.enabled = Campaign.Gold >= _tuning.ShopStonePrice && _shopStonesTotal < _stoneCapacity;
+            if (GUI.Button(new Rect(x, 150f, 170f, 34f), "Add stone"))
+            {
+                BuyStone();
+            }
             GUI.enabled = true;
+            GUI.Label(new Rect(x + 55f, 186f, 120f, 22f), GoldTag(_tuning.ShopStonePrice), rich);
 
             // Settlement reads where the stones ARE, so leaving mid-flight would freeze them wherever they
             // happened to be that frame. The way out only opens once the board has settled.
@@ -608,11 +718,18 @@ namespace Puckmite.View
             GUI.Label(new Rect(midX - 60f, Screen.height * 0.18f, 200f, 30f), "<b>Merchant</b>", rich);
             GUI.Label(new Rect(Screen.width - 170f, 12f, 160f, 24f), $"<b>Gold {Campaign.Gold}</b>", rich);
 
-            // Reroll sits above the table; its cost is the number beside it (wired up in step 13b).
-            GUI.enabled = false;
-            GUI.Button(new Rect(midX + 150f, Screen.height * 0.42f - 40f, 90f, 30f), "Reroll");
+            // Reroll sits above the table with its price beside it: every slot is redrawn, sold ones
+            // included, and each reroll makes the next one dearer (design doc 5.3).
+            int rerollPrice = RerollPrice();
+            GUI.enabled = Campaign.Gold >= rerollPrice;
+            if (GUI.Button(new Rect(midX + 150f, Screen.height * 0.42f - 40f, 90f, 30f), "Reroll"))
+            {
+                Campaign.Gold -= rerollPrice;
+                _rerollCount++;
+                RerollOffers();
+            }
             GUI.enabled = true;
-            GUI.Label(new Rect(midX + 250f, Screen.height * 0.42f - 36f, 120f, 24f), "next step", rich);
+            GUI.Label(new Rect(midX + 250f, Screen.height * 0.42f - 36f, 120f, 24f), GoldTag(rerollPrice), rich);
 
             // The table: three slots, emptied as they are bought.
             float tableY = Screen.height * 0.42f;
@@ -627,7 +744,33 @@ namespace Puckmite.View
                     continue;
                 }
 
-                UpgradeKind kind = _shopOffers[slot].Value;
+                ShopOffer offer = _shopOffers[slot].Value;
+
+                // The rare battle-stone offer shares the slot (design doc 5.3); buying it is immediate.
+                if (offer.Type == OfferType.BattleStone)
+                {
+                    int stonePrice = _tuning.BattleStonePrice;
+                    GUI.enabled = Campaign.Gold >= stonePrice && !_shopThrowing;
+                    if (GUI.Button(card, "Battle stone\n\n+1 stone in battle"))
+                    {
+                        BuyBattleStone(slot);
+                    }
+                    GUI.enabled = true;
+
+                    GUI.Label(new Rect(card.x + 70f, card.yMax + 2f, 120f, 24f), GoldTag(stonePrice), rich);
+
+                    if (card.Contains(Event.current.mousePosition))
+                    {
+                        Vector2 m = Event.current.mousePosition;
+                        GUI.Box(new Rect(m.x + 16f, m.y + 16f, 260f, 46f), GUIContent.none);
+                        GUI.Label(new Rect(m.x + 24f, m.y + 20f, 250f, 40f),
+                            "Battle stone\nOne more roster stone from the next run, until defeat.", rich);
+                    }
+
+                    continue;
+                }
+
+                UpgradeKind kind = offer.Kind;
                 int price = PriceOf(kind);
                 bool affordable = Campaign.Gold >= price && !_shopThrowing;
 
@@ -653,6 +796,32 @@ namespace Puckmite.View
             if (GUI.Button(new Rect(Screen.width - 110f, 50f, 90f, 30f), "Close"))
             {
                 _merchantOpen = false;
+            }
+        }
+
+        // The replace warning (design doc 5.1): OK replaces the cell and its levels are gone, cancel keeps
+        // the board as it was — the bought cell stays on the cursor for another spot or a right-click drop.
+        private void DrawReplaceConfirm(GUIStyle rich)
+        {
+            GUI.Box(new Rect(0f, 0f, Screen.width, Screen.height), GUIContent.none);
+
+            float midX = Screen.width * 0.5f;
+            float midY = Screen.height * 0.5f;
+            GUI.Box(new Rect(midX - 220f, midY - 70f, 440f, 140f), GUIContent.none);
+
+            ShopCell cell = Campaign.ShopBoard.CellAt(_confirmCol, _confirmRow);
+            GUI.Label(new Rect(midX - 200f, midY - 52f, 400f, 48f),
+                $"Replace <b>{UpgradeName(cell.Kind)}</b> (level {cell.Level}) with <b>{UpgradeName(_pendingCell)}</b>?\nAll of its levels will be lost.", rich);
+
+            if (GUI.Button(new Rect(midX - 110f, midY + 12f, 100f, 32f), "Replace"))
+            {
+                _confirmReplaceOpen = false;
+                CommitPendingCell(_confirmCol, _confirmRow);
+            }
+
+            if (GUI.Button(new Rect(midX + 10f, midY + 12f, 100f, 32f), "Cancel"))
+            {
+                _confirmReplaceOpen = false;
             }
         }
     }

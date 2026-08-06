@@ -120,12 +120,14 @@ namespace Puckmite.View
         }
 
         // Every stone in the current run. The enemy count is the run's (design doc 2.1); each enemy gets
-        // one stone, since per-enemy counts are 미정 (10.1).
+        // one stone, since per-enemy counts are 미정 (10.1). Battle stones bought in shops add to the
+        // player's count until the campaign is lost (design doc 5.6).
         protected override List<Puck> InitialRoster()
         {
             List<Puck> roster = new List<Puck>();
 
-            for (int i = 0; i < _tuning.PlayerStoneCount; i++)
+            int playerStones = _tuning.PlayerStoneCount + Campaign.ExtraBattleStones;
+            for (int i = 0; i < playerStones; i++)
             {
                 roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Player) { Health = _tuning.StoneHealth });
             }

@@ -1,3 +1,4 @@
+using Puckmite.Game;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -115,6 +116,16 @@ namespace Puckmite.View
             if (GUILayout.Button("x4"))
             {
                 _speed = 4f;
+            }
+            GUILayout.EndHorizontal();
+
+            // Debug money. Campaign-wide, so the shop's gold readout reflects it immediately; the current
+            // total is shown here because the battle scene has no gold display of its own.
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"Gold {GameFlow.Campaign.Gold}", GUILayout.Width(90f));
+            if (GUILayout.Button("+10000"))
+            {
+                GameFlow.Campaign.Gold += 10000;
             }
             GUILayout.EndHorizontal();
 
