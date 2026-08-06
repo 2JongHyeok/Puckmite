@@ -50,6 +50,9 @@ namespace Puckmite.Sim
                 BuffKindCheck(),
                 BuffSumCheck(),
                 EnemyPlannerCheck(),
+                ShopPlacementCheck(),
+                ShopUpgradeSumCheck(),
+                ShopEmptyCellCheck(),
             };
         }
 
@@ -743,6 +746,75 @@ namespace Puckmite.Sim
 
             found = EnemyPlanner.TryPlan(sim, PuckOwner.Enemy, ownIds, true, template, entrySpots, 50f, 0.1f, weights, config, out EnemyPlan plan);
             return plan;
+        }
+
+        /// <summary>Upgrade-board placement (design doc 5.1): an empty cell takes the cell at level 1, the
+        /// same kind again raises its level, a different kind replaces it and its levels are lost.</summary>
+        public static CheckResult ShopPlacementCheck()
+        {
+            ShopBoard board = new ShopBoard();
+
+            ShopPlacement first = board.Place(1, 1, UpgradeKind.Attack);
+            bool placed = first == ShopPlacement.Placed && board.CellAt(1, 1).Level == 1 && board.CellAt(1, 1).Kind == UpgradeKind.Attack;
+
+            ShopPlacement second = board.Place(1, 1, UpgradeKind.Attack);
+            bool upgraded = second == ShopPlacement.Upgraded && board.CellAt(1, 1).Level == 2;
+
+            bool previewWarns = board.Preview(1, 1, UpgradeKind.Shield) == ShopPlacement.Replaced;
+
+            ShopPlacement third = board.Place(1, 1, UpgradeKind.Shield);
+            bool replaced = third == ShopPlacement.Replaced && board.CellAt(1, 1).Level == 1 && board.CellAt(1, 1).Kind == UpgradeKind.Shield;
+
+            bool othersUntouched = board.CellAt(0, 0).IsEmpty && board.CellAt(2, 2).IsEmpty;
+
+            bool passed = placed && upgraded && previewWarns && replaced && othersUntouched;
+            string detail = $"placed={placed}, upgraded={upgraded}, previewWarns={previewWarns}, replaced={replaced}, othersEmpty={othersUntouched}.";
+            return new CheckResult("Shop placement", passed, detail);
+        }
+
+        /// <summary>Settlement (design doc 5.2): every occupied cell pays cell level x stone level, and a
+        /// stone straddling two cells collects both.</summary>
+        public static CheckResult ShopUpgradeSumCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            ShopBoard board = new ShopBoard();
+
+            // Centre cell (2,2) at level 2, and the cell right of it (3,2) at level 1.
+            board.Place(2, 2, UpgradeKind.Attack);
+            board.Place(2, 2, UpgradeKind.Attack);
+            board.Place(3, 2, UpgradeKind.Shield);
+
+            // A level-3 stone dead centre: only cell (2,2) -> attack 2*3 = 6.
+            sim.AddPuck(new Puck(0, new Vector2(0f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5, Level = 3 });
+            UpgradeTotals centre = board.SumUpgrades(sim, 0.1f);
+            bool centreOnly = centre.Attack == 6 && centre.Shield == 0 && centre.RunHeal == 0 && centre.MaxHealth == 0;
+
+            // A level-1 stone on the (2,2)|(3,2) boundary picks up both: attack 2*1, shield 1*1.
+            sim.RemovePuck(0);
+            sim.AddPuck(new Puck(0, new Vector2(2.5f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5, Level = 1 });
+            UpgradeTotals straddle = board.SumUpgrades(sim, 0.1f);
+            bool bothCells = straddle.Attack == 2 && straddle.Shield == 1;
+
+            bool passed = centreOnly && bothCells;
+            string detail =
+                $"centre a{centre.Attack}s{centre.Shield}(exp6,0), straddle a{straddle.Attack}s{straddle.Shield}(exp2,1).";
+            return new CheckResult("Shop upgrade sum", passed, detail);
+        }
+
+        /// <summary>An untouched upgrade board pays nothing — a stone stopping on an empty cell does
+        /// nothing at all (design doc 5.1).</summary>
+        public static CheckResult ShopEmptyCellCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            ShopBoard board = new ShopBoard();
+            sim.AddPuck(new Puck(0, new Vector2(0f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5, Level = 4 });
+
+            UpgradeTotals totals = board.SumUpgrades(sim, 0.1f);
+            bool passed = totals.Attack == 0 && totals.Shield == 0 && totals.RunHeal == 0 && totals.MaxHealth == 0;
+            string detail = $"a{totals.Attack} s{totals.Shield} h{totals.RunHeal} m{totals.MaxHealth} (all expected 0).";
+            return new CheckResult("Shop empty cells", passed, detail);
         }
 
         private static void StepUntilPuckCollision(PuckSim sim, int maxSteps = 400)

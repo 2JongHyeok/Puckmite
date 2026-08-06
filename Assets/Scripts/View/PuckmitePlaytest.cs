@@ -42,6 +42,18 @@ namespace Puckmite.View
         [SerializeField] private int _runEndHeal = 5;      // health restored after clearing a run (design doc 2.1)
         [SerializeField] private int _playerStoneCount = 2; // design doc 3.3: the player starts with 2
 
+        [Header("Shop — 놀이터 임시 (가격·강화량은 10.1에서 미정)")]
+        [SerializeField] private int _goldPerKill = 10;     // gold for each enemy taken down (design doc 5.6)
+        [SerializeField] private int _shopStonesPerVisit = 1; // stones granted each visit (design doc 5.4)
+        [SerializeField] private int _priceAttack = 5;
+        [SerializeField] private int _priceShield = 5;
+        [SerializeField] private int _priceRunHeal = 5;
+        [SerializeField] private int _priceMaxHealth = 10;
+        [SerializeField] private int _gainAttack = 1;    // stat gained per point of settled Attack
+        [SerializeField] private int _gainShield = 2;
+        [SerializeField] private int _gainRunHeal = 2;
+        [SerializeField] private int _gainMaxHealth = 5;
+
         [Header("New stone entry")]
         [SerializeField] private float _noStoneTurnDelay = 0.8f; // pause so a stoneless turn is readable
 
@@ -217,6 +229,26 @@ namespace Puckmite.View
         private const int StageCount = 3;
         private static readonly int[] RunEnemyCounts = { 1, 1, 2, 3, 1 }; // last is the boss run (boss itself: step 14)
 
+        // Upgrade board (design doc 5). The board itself and the bought stats persist for the whole campaign;
+        // offers, gold spent and shop stones are per visit. The merchant screen is an overlay on the board.
+        private readonly ShopBoard _shopBoard = new ShopBoard();
+        private bool _inShop;
+        private bool _merchantOpen;
+        private bool _shopThrowing;          // the roll button was pressed: no more buying, stones may fly
+        private int _gold;
+        private int _shopStonesLeft;
+        private int _shopStonesTotal;
+        private readonly List<UpgradeKind?> _shopOffers = new List<UpgradeKind?>();
+        private bool _hasPendingCell;        // a bought cell is riding the cursor, waiting to be placed
+        private UpgradeKind _pendingCell;
+        private int _bonusAttack;            // accumulated for the rest of the campaign (design doc 5.5)
+        private int _bonusShield;
+        private int _bonusRunHeal;
+        private int _bonusMaxHealth;
+        private string _shopLog = "";
+
+        private const int ShopOfferSlots = 3;
+
         private int _stage = 1;
         private int _run = 1;
         // Two separate values on purpose: restarting the current run must give back what the player walked
@@ -255,6 +287,18 @@ namespace Puckmite.View
 
             RebuildIfPhysicsChanged();
             ApplyHealthChangeIfNeeded();
+
+            // The upgrade board has no turns, no enemies and no attacks — just throwing stones onto cells.
+            if (_inShop)
+            {
+                HandleShopInput();
+                DriveSimulation();
+                UpdatePuckTransforms();
+                UpdateShopCells();
+                UpdateGhost();
+                return;
+            }
+
             HandleInput();
             DriveSimulation();
             // Nothing to roll: after the beat that shows it, go straight to the attack (design doc 3.5).
@@ -307,6 +351,18 @@ namespace Puckmite.View
             BuildSimFrom(new List<Puck>()); // the board starts empty; every stone enters from a hand
             AssignActors();
             BuildCamera();
+            if (_inShop)
+            {
+                BuildShopBoard();
+                BuildPuckViews();
+                BuildGhost();
+                BuildPreviewLine();
+                BuildPreviewMarker();
+                ResetShopHands();
+                UpdatePuckTransforms();
+                return;
+            }
+
             BuildBoard();
             BuildCellHighlights();
             BuildPuckViews();
@@ -331,6 +387,18 @@ namespace Puckmite.View
         private List<Puck> InitialRoster()
         {
             List<Puck> roster = new List<Puck>();
+
+            // On the upgrade board there is only the player, throwing this visit's shop stones (design doc 5.4).
+            if (_inShop)
+            {
+                for (int i = 0; i < Mathf.Max(1, _shopStonesTotal); i++)
+                {
+                    roster.Add(new Puck(roster.Count, Vector2.zero, _puckRadius, 1f, PuckOwner.Player) { Health = _health });
+                }
+
+                return roster;
+            }
+
             for (int i = 0; i < _playerStoneCount; i++)
             {
                 roster.Add(new Puck(roster.Count, Vector2.zero, _puckRadius, 1f, PuckOwner.Player) { Health = _health });
@@ -1451,13 +1519,23 @@ namespace Puckmite.View
         // the ring is not cut off by the wall; it stays well inside PuckSim's wall clamp, so the stone does
         // not jump on its first step, and still sits squarely in the entry damage column. Only y varies — a
         // new stone slides along its own edge and no further.
-        private Vector2 EntryPoint(int actor, float y)
+        private Vector2 EntryPoint(int actor, float along)
         {
             float inset = _puckRadius * RingRadiusScale;
+
+            // On the upgrade board the throw always comes off the bottom wall, so the cursor's x is what
+            // slides along it instead of its y.
+            if (_inShop)
+            {
+                float minX = _sim.BoardMin.x + inset;
+                float maxX = _sim.BoardMax.x - inset;
+                return new Vector2(Mathf.Clamp(along, minX, maxX), _sim.BoardMin.y + inset);
+            }
+
             float x = actor == 0 ? _sim.BoardMin.x + inset : _sim.BoardMax.x - inset;
             float minY = _sim.BoardMin.y + inset;
             float maxY = _sim.BoardMax.y - inset;
-            return new Vector2(x, Mathf.Clamp(y, minY, maxY));
+            return new Vector2(x, Mathf.Clamp(along, minY, maxY));
         }
 
         // Slides the waiting stone along its edge to track the cursor's height, and checks whether that spot
@@ -1484,7 +1562,7 @@ namespace Puckmite.View
                 return;
             }
 
-            _ghost.Position = EntryPoint(_currentActor, world.y);
+            _ghost.Position = EntryPoint(_currentActor, _inShop ? world.x : world.y);
             _ghostBlocked = EntrySpotBlocked(_ghost.Position);
         }
 
@@ -1522,11 +1600,13 @@ namespace Puckmite.View
         {
             outSpots.Clear();
             float inset = _puckRadius * RingRadiusScale;
-            float minY = _sim.BoardMin.y + inset;
-            float maxY = _sim.BoardMax.y - inset;
-            for (float y = minY; y <= maxY; y += _puckRadius * 0.5f)
+
+            // The entry edge runs along y in battle and along x on the upgrade board, so scan whichever axis.
+            float min = (_inShop ? _sim.BoardMin.x : _sim.BoardMin.y) + inset;
+            float max = (_inShop ? _sim.BoardMax.x : _sim.BoardMax.y) - inset;
+            for (float along = min; along <= max; along += _puckRadius * 0.5f)
             {
-                Vector2 spot = EntryPoint(actor, y);
+                Vector2 spot = EntryPoint(actor, along);
                 if (!EntrySpotBlocked(spot))
                 {
                     outSpots.Add(spot);
@@ -1800,6 +1880,11 @@ namespace Puckmite.View
         // skipped from here on.
         private void KillActor(int actor)
         {
+            if (actor != 0)
+            {
+                _gold += _goldPerKill; // gold comes from taking enemies down (design doc 5.6)
+            }
+
             _actorDead[actor] = true;
             _actorHealth[actor] = 0;
             _actorBaseShield[actor] = 0;
@@ -1862,7 +1947,7 @@ namespace Puckmite.View
 
             // Only the next run's figure moves; _runStartHealth stays put so restarting this run is still
             // worth what it was. AdvanceRun is what promotes it.
-            _nextRunHealth = Mathf.Min(_actorHealth[0] + _runEndHeal, BaseHealth(0));
+            _nextRunHealth = Mathf.Min(_actorHealth[0] + RunEndHeal(), BaseHealth(0));
             _actorHealth[0] = _nextRunHealth; // shown healed on the cleared board
 
             bool lastRun = IsBossRun;
@@ -1903,6 +1988,19 @@ namespace Puckmite.View
             _run = 1;
             _runStartHealth = 0; // start the first run at full health
             _nextRunHealth = 0;
+
+            // Nothing survives a defeat (design doc 2.1: no permanent unlocks) — the upgrade board, the
+            // stats bought on it and the gold all go back to the start.
+            _shopBoard.Clear();
+            _gold = 0;
+            _bonusAttack = 0;
+            _bonusShield = 0;
+            _bonusRunHeal = 0;
+            _bonusMaxHealth = 0;
+            _inShop = false;
+            _merchantOpen = false;
+            _hasPendingCell = false;
+
             _runCleared = false;
             _campaignCleared = false;
             Build();
@@ -1911,6 +2009,418 @@ namespace Puckmite.View
         private string RunLabel()
         {
             return IsBossRun ? $"Stage {_stage}-{_run} (Boss)" : $"Stage {_stage}-{_run}";
+        }
+
+        // --- Upgrade board / shop (design doc 5) ----------------------------------------------------
+
+        // Opens straight after a cleared run and cannot be skipped (design doc 5.1). The board itself and
+        // the stats bought on it persist; the offers and this visit's stones are fresh each time.
+        private void EnterShop()
+        {
+            _inShop = true;
+            _merchantOpen = false;
+            _shopThrowing = false;
+            _hasPendingCell = false;
+            _shopStonesTotal = Mathf.Max(1, _shopStonesPerVisit);
+            _shopStonesLeft = _shopStonesTotal;
+            _shopLog = "";
+            RerollOffers();
+            Build();
+        }
+
+        // Leaving settles the board as it stands: whatever the stones are sitting on is what gets bought
+        // into the player's stats for good (design doc 5.2/5.5). Then on to the next run.
+        private void LeaveShop()
+        {
+            UpgradeTotals gained = _shopBoard.SumUpgrades(_sim, OccupancyThreshold);
+            _bonusAttack += gained.Attack * _gainAttack;
+            _bonusShield += gained.Shield * _gainShield;
+            _bonusRunHeal += gained.RunHeal * _gainRunHeal;
+            _bonusMaxHealth += gained.MaxHealth * _gainMaxHealth;
+
+            _inShop = false;
+            _merchantOpen = false;
+            _hasPendingCell = false;
+            AdvanceRun();
+        }
+
+        // Fills every slot afresh, bought-out ones included.
+        private void RerollOffers()
+        {
+            _shopOffers.Clear();
+            for (int i = 0; i < ShopOfferSlots; i++)
+            {
+                _shopOffers.Add((UpgradeKind)(_offerCursor++ % 4));
+            }
+        }
+
+        // Deterministic offer rotation stands in for the real draw (rarity and the battle-stone offer are
+        // design doc 5.3, still 미정).
+        private int _offerCursor;
+
+        private int PriceOf(UpgradeKind kind)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return _priceAttack;
+                case UpgradeKind.Shield: return _priceShield;
+                case UpgradeKind.RunHeal: return _priceRunHeal;
+                default: return _priceMaxHealth;
+            }
+        }
+
+        private static string UpgradeName(UpgradeKind kind)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return "Attack";
+                case UpgradeKind.Shield: return "Shield";
+                case UpgradeKind.RunHeal: return "Run heal";
+                default: return "Max health";
+            }
+        }
+
+        private static Color UpgradeColor(UpgradeKind kind)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return new Color(0.70f, 0.30f, 0.25f);
+                case UpgradeKind.Shield: return new Color(0.25f, 0.45f, 0.70f);
+                case UpgradeKind.RunHeal: return new Color(0.30f, 0.62f, 0.35f);
+                default: return new Color(0.62f, 0.50f, 0.25f);
+            }
+        }
+
+        // Picking an affordable cell closes the merchant and hands it to the cursor to place on the board.
+        private void BuyCell(int slot)
+        {
+            if (!_shopOffers[slot].HasValue)
+            {
+                return;
+            }
+
+            UpgradeKind kind = _shopOffers[slot].Value;
+            if (_gold < PriceOf(kind) || _shopThrowing)
+            {
+                return;
+            }
+
+            _pendingCell = kind;
+            _hasPendingCell = true;
+            _pendingSlot = slot;
+            _merchantOpen = false;
+        }
+
+        private int _pendingSlot = -1;
+
+        // Places the carried cell on the board cell under the cursor and charges for it. Stacking the same
+        // kind raises that cell; a different kind replaces it and its levels are lost (design doc 5.1).
+        private void PlacePendingCell(int col, int row)
+        {
+            int price = PriceOf(_pendingCell);
+            if (_gold < price)
+            {
+                return;
+            }
+
+            ShopPlacement result = _shopBoard.Place(col, row, _pendingCell);
+            _gold -= price;
+            if (_pendingSlot >= 0 && _pendingSlot < _shopOffers.Count)
+            {
+                _shopOffers[_pendingSlot] = null; // that slot is spent until a reroll
+            }
+
+            _hasPendingCell = false;
+            _pendingSlot = -1;
+            _shopLog = result == ShopPlacement.Upgraded
+                ? $"{UpgradeName(_pendingCell)} cell upgraded to level {_shopBoard.CellAt(col, row).Level}."
+                : result == ShopPlacement.Replaced
+                    ? $"Cell replaced with {UpgradeName(_pendingCell)} (previous levels lost)."
+                    : $"{UpgradeName(_pendingCell)} cell placed.";
+        }
+
+        // Committing to the throwing phase: the merchant leaves, so no more cells can be bought
+        // (design doc 5.2 — buy and place first, then throw).
+        private void BeginShopThrowing()
+        {
+            _shopThrowing = true;
+            _merchantOpen = false;
+            _hasPendingCell = false;
+
+            // Not StartTurn(): that is the battle sequence, damage-cell settlement and all, and the upgrade
+            // board has none of it. The stone just steps up to the bottom wall.
+            _hasRolledThisTurn = false;
+            _currentActor = 0;
+            SetupGhost(0);
+        }
+
+        // The upgrade board: no damage cells and no fixed layout — every cell starts blank and is coloured by
+        // whatever the player has bought onto it (design doc 5.1). Cell quads are kept so UpdateShopCells can
+        // recolour them as purchases land, plus a merchant on the left that opens the buying screen.
+        private SpriteRenderer[] _shopCellViews;
+        private SpriteRenderer _merchantView;
+        private SpriteRenderer _pendingCellGhost;
+
+        private void BuildShopBoard()
+        {
+            Transform board = new GameObject("ShopBoard").transform;
+            board.SetParent(transform, false);
+
+            float full = BoardHalf * 2f;
+            MakeQuad("Background", board, Vector2.zero, new Vector2(full, full), new Color(0.16f, 0.17f, 0.20f), 0);
+
+            Vector2 boardMin = new Vector2(-BoardHalf, -BoardHalf);
+            Vector2 boardMax = new Vector2(BoardHalf, BoardHalf);
+            Vector2 cellSize = BoardCells.CellSize(boardMin, boardMax);
+
+            _shopCellViews = new SpriteRenderer[BoardCells.Size * BoardCells.Size];
+            for (int row = 0; row < BoardCells.Size; row++)
+            {
+                for (int col = 0; col < BoardCells.Size; col++)
+                {
+                    Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
+                    _shopCellViews[col + row * BoardCells.Size] =
+                        MakeQuad("ShopCell", board, center, cellSize * 0.96f, EmptyShopCellColor, 1);
+                }
+            }
+
+            Color gridColor = new Color(1f, 1f, 1f, 0.13f);
+            float[] gridLines = { -7.5f, -2.5f, 2.5f, 7.5f };
+            foreach (float g in gridLines)
+            {
+                MakeQuad("GridV", board, new Vector2(g, 0f), new Vector2(0.08f, full), gridColor, 2);
+                MakeQuad("GridH", board, new Vector2(0f, g), new Vector2(full, 0.08f), gridColor, 2);
+            }
+
+            Color wallColor = new Color(0.85f, 0.86f, 0.92f);
+            const float wallThickness = 0.4f;
+            MakeQuad("WallTop", board, new Vector2(0f, BoardHalf), new Vector2(full + wallThickness, wallThickness), wallColor, 3);
+            MakeQuad("WallBottom", board, new Vector2(0f, -BoardHalf), new Vector2(full + wallThickness, wallThickness), wallColor, 3);
+            MakeQuad("WallLeft", board, new Vector2(-BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
+            MakeQuad("WallRight", board, new Vector2(BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
+
+            // The merchant stands to the left of the board; clicking opens the buying screen.
+            GameObject merchantGo = new GameObject("Merchant");
+            merchantGo.transform.SetParent(transform, false);
+            float d = MerchantRadius * 2f;
+            merchantGo.transform.localPosition = new Vector3(MerchantX, 0f, 0f);
+            merchantGo.transform.localScale = new Vector3(d, d, 1f);
+            _merchantView = merchantGo.AddComponent<SpriteRenderer>();
+            _merchantView.sprite = ProceduralSprites.Circle();
+            _merchantView.color = new Color(0.85f, 0.75f, 0.45f);
+            _merchantView.sortingOrder = 10;
+
+            // Ghost of the cell being carried from the shop, snapped to whichever board cell is hovered.
+            GameObject pending = new GameObject("PendingCellGhost");
+            pending.transform.SetParent(transform, false);
+            _pendingCellGhost = pending.AddComponent<SpriteRenderer>();
+            _pendingCellGhost.sprite = ProceduralSprites.Unit();
+            _pendingCellGhost.sortingOrder = 4;
+            _pendingCellGhost.enabled = false;
+        }
+
+        private static readonly Color EmptyShopCellColor = new Color(0.19f, 0.20f, 0.24f);
+        private const float MerchantX = -17.5f;
+        private const float MerchantRadius = 2.2f;
+
+        // Every shop stone starts in hand and comes in off the bottom wall.
+        private void ResetShopHands()
+        {
+            for (int actor = 0; actor < _actorCount; actor++)
+            {
+                _handReady[actor].Clear();
+                _handPending[actor].Clear();
+            }
+
+            List<Puck> roster = InitialRoster();
+            for (int i = 0; i < roster.Count && i < _shopStonesLeft; i++)
+            {
+                _handReady[0].Add(roster[i].Id);
+            }
+
+            _hasRolledThisTurn = false;
+            _currentActor = 0;
+            ClearGhost();
+            if (_shopThrowing)
+            {
+                SetupGhost(0);
+            }
+        }
+
+        // Recolours each board cell for what has been bought onto it, brightening with its level, and
+        // parks the carried-cell ghost on whichever cell the cursor is over.
+        private void UpdateShopCells()
+        {
+            if (_shopCellViews == null)
+            {
+                return;
+            }
+
+            for (int row = 0; row < BoardCells.Size; row++)
+            {
+                for (int col = 0; col < BoardCells.Size; col++)
+                {
+                    ShopCell cell = _shopBoard.CellAt(col, row);
+                    Color color = cell.IsEmpty
+                        ? EmptyShopCellColor
+                        : Color.Lerp(UpgradeColor(cell.Kind), Color.white, Mathf.Min(0.12f * (cell.Level - 1), 0.5f));
+                    _shopCellViews[col + row * BoardCells.Size].color = color;
+                }
+            }
+
+            _pendingCellGhost.enabled = false;
+            if (!_hasPendingCell || _merchantOpen)
+            {
+                return;
+            }
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            if (PointerOverHud(screen))
+            {
+                return;
+            }
+
+            if (ShopCellAt(ScreenToWorld(screen), out int hoverCol, out int hoverRow))
+            {
+                Vector2 center = BoardCells.CellCenter(_sim.BoardMin, _sim.BoardMax, hoverCol, hoverRow);
+                Vector2 size = BoardCells.CellSize(_sim.BoardMin, _sim.BoardMax);
+                Color ghost = UpgradeColor(_pendingCell);
+                ghost.a = 0.55f;
+                _pendingCellGhost.transform.localPosition = new Vector3(center.x, center.y, 0f);
+                _pendingCellGhost.transform.localScale = new Vector3(size.x * 0.96f, size.y * 0.96f, 1f);
+                _pendingCellGhost.color = ghost;
+                _pendingCellGhost.enabled = true;
+            }
+        }
+
+        // Upgrade-board input: click the merchant to buy, place a carried cell, right-click to drop it, and
+        // once the throwing phase starts, aim the ghost exactly as a battle stone is aimed.
+        private void HandleShopInput()
+        {
+            _hoveredCharacter = -1;
+            _launchReady = false;
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null || _merchantOpen)
+            {
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            if (PointerOverHud(screen))
+            {
+                return;
+            }
+
+            Vector2 world = ScreenToWorld(screen);
+
+            if (_hasPendingCell)
+            {
+                if (mouse.rightButton.wasPressedThisFrame)
+                {
+                    _hasPendingCell = false; // purchase dropped; the board screen stays put
+                    _pendingSlot = -1;
+                    return;
+                }
+
+                if (mouse.leftButton.wasPressedThisFrame && ShopCellAt(world, out int col, out int row))
+                {
+                    PlacePendingCell(col, row);
+                }
+
+                return;
+            }
+
+            if (mouse.leftButton.wasPressedThisFrame && !_shopThrowing
+                && (world - new Vector2(MerchantX, 0f)).magnitude <= MerchantRadius)
+            {
+                _merchantOpen = true;
+                return;
+            }
+
+            if (!_shopThrowing)
+            {
+                return;
+            }
+
+            UpdateGhostAim(world);
+
+            if (mouse.leftButton.wasPressedThisFrame && GhostVisible() && !_ghostBlocked
+                && (world - _ghost.Position).magnitude <= GrabRadius())
+            {
+                _aiming = true;
+                _aimingPuckId = _ghost.Id;
+            }
+
+            if (_aiming && mouse.rightButton.wasPressedThisFrame)
+            {
+                _aiming = false;
+                _aimingPuckId = -1;
+                HidePreview();
+            }
+
+            if (_aiming && TryGetAimedPosition(out Vector2 aimPosition))
+            {
+                Vector2 drag = PullbackDrag(aimPosition, world);
+                _launchReady = drag.magnitude >= MinDrag && !_ghostBlocked;
+                if (_launchReady)
+                {
+                    _currentPowerFraction = DragToPowerFraction(drag.magnitude);
+                    ComputePreview(_aimingPuckId, drag.normalized * (_maxPower * _currentPowerFraction));
+                }
+                else
+                {
+                    _currentPowerFraction = 0f;
+                    HidePreview();
+                }
+            }
+
+            if (mouse.leftButton.wasReleasedThisFrame && _aiming)
+            {
+                bool blocked = _ghostBlocked;
+                bool hasPosition = TryGetAimedPosition(out Vector2 releasePosition);
+                _aiming = false;
+                HidePreview();
+
+                if (hasPosition && !blocked)
+                {
+                    Vector2 drag = PullbackDrag(releasePosition, world);
+                    if (drag.magnitude >= MinDrag)
+                    {
+                        LaunchGhost(drag.normalized * (_maxPower * DragToPowerFraction(drag.magnitude)));
+                        _shopStonesLeft = Mathf.Max(0, _shopStonesLeft - 1);
+                        _accumulator = 0f;
+                        if (_handReady[0].Count > 0)
+                        {
+                            SetupGhost(0); // the next stone steps up to the edge
+                        }
+                    }
+                }
+
+                _aimingPuckId = -1;
+            }
+        }
+
+        // The board cell under a point, or false when the point is off the board.
+        private bool ShopCellAt(Vector2 world, out int col, out int row)
+        {
+            col = 0;
+            row = 0;
+            if (!CursorInsideBoard(world))
+            {
+                return false;
+            }
+
+            Vector2 size = BoardCells.CellSize(_sim.BoardMin, _sim.BoardMax);
+            col = Mathf.Clamp(Mathf.FloorToInt((world.x - _sim.BoardMin.x) / size.x), 0, BoardCells.Size - 1);
+            row = Mathf.Clamp(Mathf.FloorToInt((world.y - _sim.BoardMin.y) / size.y), 0, BoardCells.Size - 1);
+            return true;
         }
 
         // The character whose body circle covers the point, or -1. Used to pick an attack target.
@@ -1929,19 +2439,26 @@ namespace Puckmite.View
             return -1;
         }
 
+        // The player's base stats carry the upgrades bought on the shop board; they accumulate for the whole
+        // campaign (design doc 5.5). Enemies are unaffected.
         private int BaseHealth(int actor)
         {
-            return actor == 0 ? _playerBaseHealth : _enemyBaseHealth;
+            return actor == 0 ? _playerBaseHealth + _bonusMaxHealth : _enemyBaseHealth;
         }
 
         private int BaseAttack(int actor)
         {
-            return actor == 0 ? _playerBaseAttack : _enemyBaseAttack;
+            return actor == 0 ? _playerBaseAttack + _bonusAttack : _enemyBaseAttack;
         }
 
         private int BaseShield(int actor)
         {
-            return actor == 0 ? _playerBaseShield : _enemyBaseShield;
+            return actor == 0 ? _playerBaseShield + _bonusShield : _enemyBaseShield;
+        }
+
+        private int RunEndHeal()
+        {
+            return _runEndHeal + _bonusRunHeal;
         }
 
         // Overlays each cell a puck currently occupies with a translucent quad in the owner's colour,
@@ -2244,12 +2761,144 @@ namespace Puckmite.View
             }
         }
 
+        // --- Upgrade board GUI ----------------------------------------------------------------------
+
+        // Gold is shown red wherever the player cannot afford the thing next to it.
+        private string GoldTag(int price)
+        {
+            string colour = _gold >= price ? "#ffd24a" : "#ff5a4a";
+            return $"<color={colour}>{price}G</color>";
+        }
+
+        private void DrawShopGui()
+        {
+            GUIStyle rich = new GUIStyle(GUI.skin.label) { richText = true };
+
+            // Gold, top right (design doc 5.6: it carries between shops).
+            GUI.Label(new Rect(Screen.width - 170f, 12f, 160f, 24f), $"<b>Gold {_gold}</b>", rich);
+
+            // Stones left this visit, above the board.
+            GUI.Label(new Rect(Screen.width * 0.5f - 80f, 12f, 200f, 24f),
+                $"Stones {_shopStonesLeft} / {_shopStonesTotal}", rich);
+
+            if (_shopLog.Length > 0)
+            {
+                GUI.Label(new Rect(Screen.width * 0.5f - 220f, 38f, 520f, 24f), _shopLog, rich);
+            }
+
+            // Right-hand controls: roll (once, then greyed out but still shown), buy a stone, and leave.
+            float x = Screen.width - 190f;
+            GUI.enabled = !_shopThrowing;
+            if (GUI.Button(new Rect(x, 90f, 170f, 34f), _shopThrowing ? "Rolling…" : "Roll stones"))
+            {
+                BeginShopThrowing();
+            }
+            GUI.enabled = true;
+
+            // Buying extra stones is design doc 5.4 — wired up in the next step, shown disabled for now.
+            GUI.enabled = false;
+            GUI.Button(new Rect(x, 150f, 170f, 34f), "Add stone (next step)");
+            GUI.enabled = true;
+
+            if (GUI.Button(new Rect(x, 210f, 170f, 34f), "Leave shop"))
+            {
+                LeaveShop();
+                return;
+            }
+
+            if (_hasPendingCell)
+            {
+                GUI.Label(new Rect(x, 254f, 190f, 40f),
+                    $"Placing {UpgradeName(_pendingCell)}\nright-click to cancel", rich);
+            }
+
+            if (_merchantOpen)
+            {
+                DrawMerchantScreen(rich);
+            }
+        }
+
+        // The merchant's screen: three cells on the table, a reroll button, and a close button. It covers
+        // the board while open (design doc 5.3 — the offer is what you may buy).
+        private void DrawMerchantScreen(GUIStyle rich)
+        {
+            GUI.Box(new Rect(0f, 0f, Screen.width, Screen.height), GUIContent.none);
+
+            float midX = Screen.width * 0.5f;
+            GUI.Label(new Rect(midX - 60f, Screen.height * 0.18f, 200f, 30f), "<b>Merchant</b>", rich);
+            GUI.Label(new Rect(Screen.width - 170f, 12f, 160f, 24f), $"<b>Gold {_gold}</b>", rich);
+
+            // Reroll sits above the table; its cost is the number beside it (wired up in the next step).
+            GUI.enabled = false;
+            GUI.Button(new Rect(midX + 150f, Screen.height * 0.42f - 40f, 90f, 30f), "Reroll");
+            GUI.enabled = true;
+            GUI.Label(new Rect(midX + 250f, Screen.height * 0.42f - 36f, 120f, 24f), "next step", rich);
+
+            // The table: three slots, emptied as they are bought.
+            float tableY = Screen.height * 0.42f;
+            GUI.Box(new Rect(midX - 330f, tableY, 660f, 190f), GUIContent.none);
+
+            for (int slot = 0; slot < _shopOffers.Count; slot++)
+            {
+                Rect card = new Rect(midX - 310f + slot * 215f, tableY + 20f, 190f, 150f);
+                if (!_shopOffers[slot].HasValue)
+                {
+                    GUI.Label(new Rect(card.x + 60f, card.y + 60f, 120f, 24f), "sold", rich);
+                    continue;
+                }
+
+                UpgradeKind kind = _shopOffers[slot].Value;
+                int price = PriceOf(kind);
+                bool affordable = _gold >= price && !_shopThrowing;
+
+                GUI.enabled = affordable;
+                if (GUI.Button(card, $"{UpgradeName(kind)}\n\n+{GainOf(kind)} per point"))
+                {
+                    BuyCell(slot);
+                }
+                GUI.enabled = true;
+
+                GUI.Label(new Rect(card.x + 70f, card.yMax + 2f, 120f, 24f), GoldTag(price), rich);
+
+                // Tooltip beside the cursor while the card is hovered.
+                if (card.Contains(Event.current.mousePosition))
+                {
+                    Vector2 m = Event.current.mousePosition;
+                    GUI.Box(new Rect(m.x + 16f, m.y + 16f, 260f, 46f), GUIContent.none);
+                    GUI.Label(new Rect(m.x + 24f, m.y + 20f, 250f, 40f),
+                        $"{UpgradeName(kind)}\nStone on this cell: +{GainOf(kind)} x cell level x stone level", rich);
+                }
+            }
+
+            if (GUI.Button(new Rect(Screen.width - 110f, 50f, 90f, 30f), "Close"))
+            {
+                _merchantOpen = false;
+            }
+        }
+
+        private int GainOf(UpgradeKind kind)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return _gainAttack;
+                case UpgradeKind.Shield: return _gainShield;
+                case UpgradeKind.RunHeal: return _gainRunHeal;
+                default: return _gainMaxHealth;
+            }
+        }
+
         // --- HUD ----------------------------------------------------------------------------------
 
         private void OnGUI()
         {
             if (_sim == null)
             {
+                return;
+            }
+
+            if (_inShop)
+            {
+                DrawShopGui();
                 return;
             }
 
@@ -2268,10 +2917,10 @@ namespace Puckmite.View
             }
             else if (_runCleared)
             {
-                // The shop will take this slot (design doc 2.1: straight after a run, not skippable).
-                if (GUILayout.Button("Next run  ▶"))
+                // The shop opens straight after a cleared run and is the only way on (design doc 2.1).
+                if (GUILayout.Button("Enter shop  ▶"))
                 {
-                    AdvanceRun();
+                    EnterShop();
                 }
             }
             else if (_gameOver)
