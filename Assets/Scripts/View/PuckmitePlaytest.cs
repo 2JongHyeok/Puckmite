@@ -97,9 +97,6 @@ namespace Puckmite.View
         private static readonly Color RingLaunchReady = new Color(1f, 0.35f, 0.25f, 0.95f);
         private static readonly Color RingBlocked = new Color(0.55f, 0.55f, 0.60f, 0.55f); // entry spot occupied
 
-        // How close to its entry edge the cursor must be before the waiting new stone follows it.
-        private const float GhostFollowRange = 6f;
-
         // Highlight rings reach this far out from a stone's centre, in radii. The entry spot is inset by it
         // so a waiting stone's ring clears the wall instead of being sliced by it.
         private const float RingRadiusScale = 1.25f;
@@ -170,6 +167,7 @@ namespace Puckmite.View
         private bool _ghostActive;
         private Puck _ghost;
         private bool _ghostBlocked; // its spot overlaps a stone already on the board, so it cannot launch
+        private bool _ghostShown;   // the cursor is somewhere the ghost should be drawn and track
         private SpriteRenderer _ghostView;
         private SpriteRenderer _ghostRing;
 
@@ -610,7 +608,7 @@ namespace Puckmite.View
                     _aiming = true;
                     _aimingPuckId = id;
                 }
-                else if (_ghostActive && !_ghostBlocked && (world - _ghost.Position).magnitude <= GrabRadius())
+                else if (GhostVisible() && !_ghostBlocked && (world - _ghost.Position).magnitude <= GrabRadius())
                 {
                     _aiming = true;
                     _aimingPuckId = _ghost.Id;
@@ -1302,12 +1300,14 @@ namespace Puckmite.View
             _ghost = new Puck(_handReady[actor][0], EntryPoint(actor, 0f), _puckRadius, 1f, owner) { Health = _health };
             _ghostActive = true;
             _ghostBlocked = false;
+            _ghostShown = false; // stays hidden until the cursor comes onto the board
         }
 
         private void ClearGhost()
         {
             _ghostActive = false;
             _ghostBlocked = false;
+            _ghostShown = false;
         }
 
         // The entry edge: the player's new stones come in on the left, an enemy's on the right, hugging that
@@ -1324,20 +1324,44 @@ namespace Puckmite.View
             return new Vector2(x, Mathf.Clamp(y, minY, maxY));
         }
 
-        // Slides the waiting stone along its edge to follow the cursor, and checks whether that spot is free.
+        // Slides the waiting stone along its edge to track the cursor's height, and checks whether that spot
+        // is free. It shows only while the cursor is over the board and not over one of this actor's own
+        // stones — there the stone itself is what a click is for, so the ghost would only be in the way.
         private void UpdateGhostAim(Vector2 world)
         {
             if (!_ghostActive || _hasRolledThisTurn)
             {
+                _ghostShown = false;
                 return;
             }
 
-            if (!_aiming && Mathf.Abs(world.x - _ghost.Position.x) <= GhostFollowRange)
+            if (IsAimingGhost())
             {
-                _ghost.Position = EntryPoint(_currentActor, world.y);
+                // Held in place for the pull-back, which drags the cursor back off the board.
+                _ghostBlocked = EntrySpotBlocked(_ghost.Position);
+                return;
             }
 
+            _ghostShown = !_aiming && CursorInsideBoard(world) && NearestPuckId(world) < 0;
+            if (!_ghostShown)
+            {
+                return;
+            }
+
+            _ghost.Position = EntryPoint(_currentActor, world.y);
             _ghostBlocked = EntrySpotBlocked(_ghost.Position);
+        }
+
+        private bool CursorInsideBoard(Vector2 world)
+        {
+            return world.x >= _sim.BoardMin.x && world.x <= _sim.BoardMax.x
+                && world.y >= _sim.BoardMin.y && world.y <= _sim.BoardMax.y;
+        }
+
+        // Drawn and grabbable only while it is tracking the cursor, or while it is the stone being aimed.
+        private bool GhostVisible()
+        {
+            return _ghostActive && !_hasRolledThisTurn && (_ghostShown || IsAimingGhost());
         }
 
         // Launching from inside another stone would shove it aside for free, so such a spot is refused.
@@ -1402,7 +1426,7 @@ namespace Puckmite.View
                 return;
             }
 
-            if (!_ghostActive || _hasRolledThisTurn)
+            if (!GhostVisible())
             {
                 _ghostView.enabled = false;
                 _ghostRing.enabled = false;
