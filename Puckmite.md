@@ -361,7 +361,8 @@
 
 ```
 Assets/Scripts/Sim    시뮬레이션 (UnityEngine 의존은 Vector2만)
-Assets/Scripts/View   렌더링, 입력
+Assets/Scripts/Game   씬을 넘는 게임 흐름 — CampaignState(캠페인 상태), GameFlow(씬 전환). 순수 C#, MonoBehaviour 금지
+Assets/Scripts/View   렌더링, 입력 — ArenaControllerBase(공용), BattleController, ShopController, DebugPanel, GameTuning
 ```
 
 ## 7.7 현재 구현 상태
@@ -404,11 +405,23 @@ Assets/Scripts/View   렌더링, 입력
   - 버프 칸 종류 / 버프 합산 / 적 AI(결정론·합법 수)
   - 상점 칸 배치(배치·강화·교체) / 상점 강화 합산 / 상점 빈 칸 무효과
 
-**View** — 플레이테스트(`Assets/Scripts/View`, `Assets/Editor/PuckmitePlaytestMenu`)에서 **한 캠페인이 처음부터 끝까지 돈다.**
+**View** — **한 캠페인이 처음부터 끝까지 돈다.**
 런: 빈 보드에서 시작 → 새 스톤 투입 또는 큐샷 → 정지 후 버프 확정 → 공격 → 적 AI가 같은 절차를 자동 수행 → 승패.
 캠페인: 3스테이지 × 5런을 돌며 런 사이마다 상점이 열린다.
 
-> 뷰는 전부 `PuckmitePlaytest.cs` **한 파일**(~3,000줄)에 있다. 파일 분리는 미뤄둔 상태다.
+> 놀이터(`PuckmitePlaytest` 단일 파일)는 씬 분리 리팩터링으로 해체됐다. 지금 구조:
+> - **씬 2개** — `Battle.unity`(전투) / `Shop.unity`(상점), `Tools/Puckmite/Setup Game Scenes` 메뉴가 생성·재설정(멱등).
+>   씬에는 카메라와 컨트롤러 GO만 있고 보드·퍽·UI는 여전히 런타임 절차 생성.
+>   전환: 런 승리 → Enter shop → Shop 로드 → 나가기(정산) → 다음 런 Battle 로드. 패배 → 캠페인 리셋 후 Battle.
+>   시작/엔딩 화면은 나중에 `GameFlow`에 씬 이름을 추가해 끼워 넣는다.
+> - **공용 베이스** `ArenaControllerBase` — 고정 스텝 드라이버, 카메라/퍽 뷰 절차 생성, Id 인덱스 뷰 배열,
+>   손·진입 고스트, 당겨 쏘기 조준 + 궤적 미리보기, 하이라이트 링. `BattleController`/`ShopController`가 상속.
+> - **캠페인 상태** `CampaignState`(순수 C#) — 스테이지·런·골드·강화·이월 체력·`ShopBoard`.
+>   `GameFlow.Campaign` static으로 씬 로드를 넘어 생존, 패배 시 `Reset()`.
+> - **튜닝 애셋** `GameTuning`(`Assets/Settings/GameTuning.asset`) — 물리·스탯·가격·AI 가중치 전부.
+>   두 씬이 공유하므로 씬마다 값이 갈릴 수 없다. 플레이 중 슬라이더로 바꾼 값은 애셋에 남는다.
+> - **디버그 패널** `DebugPanel` — **F1**로 토글. 진단 수치, 튜닝 슬라이더 10종, 배속 x1/x2/x4,
+>   (전투에서만) AI ON/OFF·난이도 5단계·런 재시작. 게임 HUD에는 스테이지 라벨·턴 안내·공격 로그·Power %·진행 버튼만 남는다.
 
 - 런타임 생성 보드·벽·퍽(씬 파일 없음, 아트는 절차적 자리표시 — 나중에 애셋 교체), 배속, HUD 튜닝 슬라이더(창 높이에 맞춰 스크롤)
 - **조준**: 당구식 당겨 쏘기(가고 싶은 방향의 반대로 당김), 궤적 미리보기 + 도착 마커, 우클릭 취소.
@@ -458,8 +471,8 @@ Assets/Scripts/View   렌더링, 입력
 
 **View 단계**
 
-> 참고: 다중 퍽 플레이테스트(`PuckmitePlaytest`)가 3~5를 놀이터 형태로 한꺼번에 덮었다.
-> 손맛 확인(6)을 앞당기려고 순서를 벗어나 먼저 만들었다. 정식 분리 구현은 손맛이 잡힌 뒤 정리.
+> 참고: 다중 퍽 플레이테스트(놀이터)가 3~5를 한꺼번에 덮었고, 손맛 확인(6)을 앞당기려고 순서를 벗어나
+> 먼저 만들었다. 놀이터는 이후 씬 분리 리팩터링으로 해체됐다 (7.7의 현재 구조 참고).
 
 3. 보드 그리기 — 직교 카메라, 5x5 격자, 안쪽 3x3 구분, 벽 경계.
    런타임 절차 생성, 씬 파일 만들지 않음
@@ -508,9 +521,9 @@ Assets/Scripts/View   렌더링, 입력
 
 ## 7.9 View 작업 시 제약
 
-- `.unity` 씬 파일을 만들거나 수정하지 않는다.
-  런타임에 전부 생성하는 부트스트랩 MonoBehaviour 하나만 만들고,
-  빈 GameObject에 붙이는 것은 사람이 한다
+- `.unity` 씬 파일을 **손으로** 만들거나 수정하지 않는다.
+  씬은 Editor 스크립트(`Tools/Puckmite/Setup Game Scenes`)가 Unity API로 생성·관리하고,
+  씬에는 카메라와 컨트롤러 GameObject만 둔다. 보드·퍽·UI는 컨트롤러가 런타임에 전부 절차 생성한다
 - 외부 아트 에셋을 쓰지 않는다. 메시·스프라이트·텍스처는 절차적으로 생성한다
 - 렌더링은 시뮬 상태를 **읽기만** 한다. 발사 호출 외에는 쓰기 금지
 - 배속은 프레임당 소비하는 1/120 스텝 개수만 바꾼다.

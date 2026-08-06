@@ -148,9 +148,10 @@ Unity는 학습 데이터가 따라잡는 속도보다 빠르게 API를 폐기�
 
 ## 폴더 구조
 
-`Assets/Scripts/`는 시뮬과 뷰로 최상위 분리한다 (위 "아키텍처 원칙" 참고):
+`Assets/Scripts/`는 시뮬·게임 흐름·뷰로 최상위 분리한다 (위 "아키텍처 원칙" 참고):
 
 - `Assets/Scripts/Sim/` — 시뮬레이션. `UnityEngine` 의존은 `Vector2`만. `Rigidbody2D`/`Collider2D`/MonoBehaviour 금지.
+- `Assets/Scripts/Game/` — 씬을 넘어 이어지는 게임 흐름(캠페인 상태, 씬 전환). 순수 C# + 씬 로딩 API만, MonoBehaviour 금지.
 - `Assets/Scripts/View/` — 렌더링, 입력. MonoBehaviour는 여기 둔다.
 
 나머지는 `Assets/` 아래 종류별로 정리: `Scenes/`, `Prefabs/`, `Art/`(`Sprites/`, `Animations/`, `Materials/`), `Audio/`, `UI/`, `Editor/`(Unity 특수 폴더 — 이름 바꾸지 말 것), `Settings/`(Unity 생성 — 재정리하지 말 것), `Plugins/`(서드파티).

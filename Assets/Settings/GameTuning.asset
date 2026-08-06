@@ -1,0 +1,53 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: abdfbb18683736343a49e00e5c14041f, type: 3}
+  m_Name: GameTuning
+  m_EditorClassIdentifier: Assembly-CSharp::Puckmite.View.GameTuning
+  Friction: 10
+  Restitution: 1
+  CollisionSpeedKept: 0.7
+  RestThreshold: 0.4
+  WallRestitution: 0.6
+  MaxPower: 50
+  PowerScale: 6
+  PowerCurve: 1
+  PuckRadius: 1.5
+  StoneHealth: 5
+  CellDamage: 1
+  PlayerBaseHealth: 20
+  PlayerBaseAttack: 2
+  PlayerBaseShield: 0
+  EnemyBaseHealth: 10
+  EnemyBaseAttack: 1
+  EnemyBaseShield: 0
+  RunEndHeal: 5
+  PlayerStoneCount: 2
+  GoldPerKill: 10
+  ShopStonesPerVisit: 1
+  PriceAttack: 5
+  PriceShield: 5
+  PriceRunHeal: 5
+  PriceMaxHealth: 10
+  GainAttack: 1
+  GainShield: 2
+  GainRunHeal: 2
+  GainMaxHealth: 5
+  NoStoneTurnDelay: 0.8
+  EnemyAiEnabled: 1
+  AiDifficulty: 2
+  EnemyThinkDelay: 0.8
+  AiBuffAttackWeight: 1
+  AiBuffShieldWeight: 1
+  AiDamageWeight: 3
+  AiDestroyBonus: 2
+  AiOwnDamageWeight: 2
+  AiDamageCellPenalty: 1.5
