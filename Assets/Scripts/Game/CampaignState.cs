@@ -10,9 +10,16 @@ namespace Puckmite.Game
     /// </summary>
     public sealed class CampaignState
     {
-        // Progression (design doc 2.1): 3 stages of 5 runs, enemy counts fixed per run.
+        // Progression (design doc 2.1): 3 stages of 5 runs, enemy counts fixed per run and per stage.
+        // Stage 1 was softened to 1/1/1/2/boss when the enemy types arrived (사용자 지정, design doc 4.3).
         public const int StageCount = 3;
-        public static readonly int[] RunEnemyCounts = { 1, 1, 2, 3, 1 }; // last is the boss run (boss itself: step 14)
+        public const int RunsPerStage = 5;
+        private static readonly int[][] StageRunEnemyCounts =
+        {
+            new[] { 1, 1, 1, 2, 1 },
+            new[] { 1, 1, 2, 3, 1 },
+            new[] { 1, 1, 2, 3, 1 },
+        };
 
         public int Stage = 1;
         public int Run = 1;
@@ -36,23 +43,34 @@ namespace Puckmite.Game
 
         public readonly ShopBoard ShopBoard = new ShopBoard();
 
-        public bool IsBossRun => Run == RunEnemyCounts.Length;
+        public bool IsBossRun => Run == RunsPerStage;
 
         public int EnemyCountForRun
         {
             get
             {
-                int index = Run - 1;
-                if (index < 0)
+                int stage = Stage - 1;
+                if (stage < 0)
                 {
-                    index = 0;
+                    stage = 0;
                 }
-                else if (index >= RunEnemyCounts.Length)
+                else if (stage >= StageRunEnemyCounts.Length)
                 {
-                    index = RunEnemyCounts.Length - 1;
+                    stage = StageRunEnemyCounts.Length - 1;
                 }
 
-                return RunEnemyCounts[index];
+                int[] counts = StageRunEnemyCounts[stage];
+                int run = Run - 1;
+                if (run < 0)
+                {
+                    run = 0;
+                }
+                else if (run >= counts.Length)
+                {
+                    run = counts.Length - 1;
+                }
+
+                return counts[run];
             }
         }
 

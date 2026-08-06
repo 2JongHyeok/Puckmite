@@ -56,6 +56,10 @@ namespace Puckmite.Sim
                 HoleDestructionCheck(),
                 HoleCloneCheck(),
                 HoleClearedCheck(),
+                BombExplosionCheck(),
+                AnchorCheck(),
+                SniperDamageCheck(),
+                SniperPlanCheck(),
             };
         }
 
@@ -879,6 +883,153 @@ namespace Puckmite.Sim
             bool passed = noneByDefault && survived && crossed;
             string detail = $"noneByDefault={noneByDefault}, survived={survived}, restX={(survived ? after.Position.x : float.NaN):F2} (expect > 2.5).";
             return new CheckResult("Hole cleared", passed, detail);
+        }
+
+        /// <summary>자폭 (design doc 4.3): a bomb meeting a player stone detonates — the bomb dies, every
+        /// player stone in reach (the direct victim included) takes 2 and is shoved away, enemy stones are
+        /// untouched.</summary>
+        public static CheckResult BombExplosionCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            sim.AddPuck(new Puck(0, new Vector2(-8f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5, Velocity = new Vector2(18f, 0f) });
+            sim.AddPuck(new Puck(1, new Vector2(0f, 0f), 1.5f, 1f, PuckOwner.Enemy) { Health = 5, Trait = StoneTrait.Bomb });
+            sim.AddPuck(new Puck(2, new Vector2(0f, 4f), 1.5f, 1f, PuckOwner.Player) { Health = 5 });  // in reach (4 < 6)
+            sim.AddPuck(new Puck(3, new Vector2(0f, -5f), 1.5f, 1f, PuckOwner.Enemy) { Health = 5 });  // in reach but enemy
+
+            List<PuckSimEvent> events = RunToRestCollecting(sim);
+            bool bombGone = !sim.TryGetPuck(1, out _);
+            bool bombDestroyedEvent = false;
+            for (int i = 0; i < events.Count; i++)
+            {
+                if (events[i].Type == PuckSimEventType.PuckDestroyed && events[i].PuckA == 1)
+                {
+                    bombDestroyedEvent = true;
+                }
+            }
+
+            sim.TryGetPuck(0, out Puck striker);
+            sim.TryGetPuck(2, out Puck bystander);
+            sim.TryGetPuck(3, out Puck enemyNear);
+            bool strikerHit = striker.Health == 3;      // blast 2, no ordinary contact damage on top
+            bool bystanderHit = bystander.Health == 3;  // in reach: 2
+            bool bystanderShoved = bystander.Position != new Vector2(0f, 4f);
+            bool enemyUntouched = enemyNear.Health == 5 && enemyNear.Position == new Vector2(0f, -5f);
+
+            bool passed = bombGone && bombDestroyedEvent && strikerHit && bystanderHit && bystanderShoved && enemyUntouched;
+            string detail =
+                $"bombGone={bombGone}, event={bombDestroyedEvent}, striker={striker.Health}(exp3), bystander={bystander.Health}(exp3), shoved={bystanderShoved}, enemyUntouched={enemyUntouched}.";
+            return new CheckResult("Bomb explosion", passed, detail);
+        }
+
+        /// <summary>반석 (design doc 4.3): an anchor stone never moves in a collision, and the striker
+        /// bounces back with the energy returned in full (no restitution/impact-damping loss).</summary>
+        public static CheckResult AnchorCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            sim.AddPuck(new Puck(0, new Vector2(-8f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5, Velocity = new Vector2(12f, 0f) });
+            sim.AddPuck(new Puck(1, new Vector2(0f, 0f), 1.5f, 1f, PuckOwner.Enemy) { Health = 2, Trait = StoneTrait.Anchor });
+
+            sim.RunToRest();
+
+            sim.TryGetPuck(0, out Puck striker);
+            sim.TryGetPuck(1, out Puck anchor);
+            bool anchorStayed = anchor.Position == new Vector2(0f, 0f);
+            // Full energy return: the striker (contact at x=-3 with ~6.6 speed left) must bounce back past
+            // its own approach — with the 0.7 impact bleed it would stop around x=-4.1, so requiring
+            // clearly beyond that separates "returned in full" from "ordinary collision".
+            bool bouncedBack = striker.Position.x < -4.5f;
+            bool damaged = striker.Health == 4 && anchor.Health == 1; // ordinary cross-team 1 each
+
+            bool passed = anchorStayed && bouncedBack && damaged;
+            string detail =
+                $"anchorStayed={anchorStayed}, strikerRestX={striker.Position.x:F2}(exp < -4.5), striker hp={striker.Health}(exp4), anchor hp={anchor.Health}(exp1).";
+            return new CheckResult("Anchor stone", passed, detail);
+        }
+
+        /// <summary>저격 (design doc 4.3): the armed sniper stone's first player contact deals 2 and
+        /// disarms; a later (passive) contact is the ordinary 1.</summary>
+        public static CheckResult SniperDamageCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            sim.AddPuck(new Puck(0, new Vector2(-8f, 0f), 1.5f, 1f, PuckOwner.Enemy) { Health = 5, Trait = StoneTrait.Sniper });
+            sim.AddPuck(new Puck(1, new Vector2(0f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 5 });
+
+            // The sniper's own roll: armed, so the first player contact costs 2 (and 1 back onto the sniper).
+            sim.SetSniperArmed(0, true);
+            sim.SetVelocity(0, new Vector2(12f, 0f));
+            sim.RunToRest();
+            sim.TryGetPuck(0, out Puck sniperAfterRoll);
+            sim.TryGetPuck(1, out Puck victim);
+            bool armedHit = victim.Health == 3 && sniperAfterRoll.Health == 4;
+            bool disarmed = !sniperAfterRoll.SniperArmed;
+
+            // The player strikes back at the (now disarmed) sniper stone: ordinary 1 each way.
+            sim.SetVelocity(1, (sniperAfterRoll.Position - victim.Position).normalized * 12f);
+            sim.RunToRest();
+            sim.TryGetPuck(0, out Puck sniperAfterReturn);
+            sim.TryGetPuck(1, out Puck attacker);
+            bool passiveHit = sniperAfterReturn.Health == 3 && attacker.Health == 2;
+
+            bool passed = armedHit && disarmed && passiveHit;
+            string detail =
+                $"armedHit victim={victim.Health}(exp3)/sniper={sniperAfterRoll.Health}(exp4), disarmed={disarmed}, passive sniper={sniperAfterReturn.Health}(exp3)/attacker={attacker.Health}(exp2).";
+            return new CheckResult("Sniper damage", passed, detail);
+        }
+
+        /// <summary>저격 조준 (design doc 4.3): with a snipe priority set and a clear line, the planner's
+        /// pick first-contacts the priority target rather than a higher-scoring ordinary shot.</summary>
+        public static CheckResult SniperPlanCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            sim.AddPuck(new Puck(0, new Vector2(-9f, 0f), 1.5f, 1f, PuckOwner.Enemy) { Health = 5, Trait = StoneTrait.Sniper });
+            sim.AddPuck(new Puck(1, new Vector2(5f, 0f), 1.5f, 1f, PuckOwner.Player) { Health = 1 });  // the weak target
+            sim.AddPuck(new Puck(2, new Vector2(5f, 6f), 1.5f, 1f, PuckOwner.Player) { Health = 5 });
+
+            EnemyPlanWeights weights = new EnemyPlanWeights
+            {
+                BuffAttack = 1f, BuffShield = 1f, DamageDealt = 3f, StoneDestroyed = 2f, OwnDamage = 2f, OwnOnDamageCell = 1.5f,
+            };
+            EnemyPlanConfig config = new EnemyPlanConfig
+            {
+                CueDirections = 24,
+                EntryDirections = 6,
+                PowerFractions = new float[] { 0.4f, 0.7f, 1f },
+                FullRollout = false,
+                PickRank = 0f,
+                SnipePriority = new[] { 1, 2 }, // weakest first
+            };
+
+            bool planned = EnemyPlanner.TryPlan(
+                sim, PuckOwner.Enemy, new[] { 0 }, false, default, System.Array.Empty<Vector2>(),
+                50f, 0.1f, weights, config, out EnemyPlan plan);
+
+            // Replay the pick and watch who the cue touches first.
+            int firstContact = -1;
+            if (planned)
+            {
+                PuckSim replay = sim.Clone();
+                replay.SetSniperArmed(0, true);
+                replay.SetVelocity(plan.StoneId, plan.Velocity);
+                for (int step = 0; step < 2000 && !replay.AllAtRest() && firstContact < 0; step++)
+                {
+                    IReadOnlyList<PuckSimEvent> events = replay.Step();
+                    for (int i = 0; i < events.Count && firstContact < 0; i++)
+                    {
+                        if (events[i].Type == PuckSimEventType.PuckCollision)
+                        {
+                            firstContact = events[i].PuckA == 0 ? events[i].PuckB : events[i].PuckA;
+                        }
+                    }
+                }
+            }
+
+            bool passed = planned && firstContact == 1;
+            string detail = $"planned={planned}, firstContact={firstContact} (expect 1, the weakest stone).";
+            return new CheckResult("Sniper plan", passed, detail);
         }
 
         // One stone rolling left-to-right straight through the centre cell (2,2) on the real board size.

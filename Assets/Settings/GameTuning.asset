@@ -21,17 +21,20 @@ MonoBehaviour:
   PowerScale: 6
   PowerCurve: 1
   PuckRadius: 1.5
-  StoneHealth: 5
+  StoneHealth: 3
   CellDamage: 1
-  PlayerBaseHealth: 20
-  PlayerBaseAttack: 2
-  PlayerBaseShield: 0
+  PlayerBaseHealth: 50
+  PlayerBaseAttack: 3
+  PlayerBaseShield: 100
   EnemyBaseHealth: 10
-  EnemyBaseAttack: 1
+  EnemyBaseAttack: 3
   EnemyBaseShield: 0
+  BossBaseHealth: 100
+  BossBaseAttack: 10
+  BossBaseShield: 0
   RunEndHeal: 5
   PlayerStoneCount: 2
-  GoldPerKill: 10
+  GoldPerKill: 100
   ShopStonesPerVisit: 1
   PriceAttack: 5
   PriceShield: 5
@@ -41,6 +44,11 @@ MonoBehaviour:
   GainShield: 2
   GainRunHeal: 2
   GainMaxHealth: 5
+  ShopStonePrice: 15
+  RerollBasePrice: 5
+  RerollPriceStep: 5
+  BattleStoneChance: 0.1
+  BattleStonePrice: 25
   NoStoneTurnDelay: 0.8
   EnemyAiEnabled: 1
   AiDifficulty: 2

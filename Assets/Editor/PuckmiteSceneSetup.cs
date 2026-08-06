@@ -122,6 +122,30 @@ namespace Puckmite.EditorTools
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
+        // The tuning asset keeps its own values once created — code defaults only seed it. When the user
+        // re-baselines the numbers (2026-08: player 50/3, enemy 10/3, stone health 3), the asset has to be
+        // updated through the API (project rule: no hand-editing Unity YAML). Touches only these fields;
+        // every other slider tweak in the asset survives.
+        [MenuItem("Tools/Puckmite/Apply Stat Baseline (2026-08)")]
+        public static void ApplyStatBaseline()
+        {
+            GameTuning tuning = AssetDatabase.LoadAssetAtPath<GameTuning>(TuningPath);
+            if (tuning == null)
+            {
+                Debug.LogError("[Puckmite] GameTuning.asset not found — run Tools/Puckmite/Setup Game Scenes first.");
+                return;
+            }
+
+            tuning.PlayerBaseHealth = 50;
+            tuning.PlayerBaseAttack = 3;
+            tuning.EnemyBaseHealth = 10;
+            tuning.EnemyBaseAttack = 3;
+            tuning.StoneHealth = 3;
+            EditorUtility.SetDirty(tuning);
+            AssetDatabase.SaveAssets();
+            Debug.Log("[Puckmite] Stat baseline applied: player 50/3, enemy 10/3, stone health 3.");
+        }
+
         // One-time cleanup, run only after the new scenes are verified: AssetDatabase handles the .meta
         // files, so nothing is left dangling.
         [MenuItem("Tools/Puckmite/Delete Legacy Playtest")]

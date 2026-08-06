@@ -26,6 +26,11 @@ namespace Puckmite.Sim
         public const int XpPerLevel = 3;
         public const int MaxLevel = 5;
 
+        // 자폭형's blast (design doc 4.3) — temporary numbers, finalised in the balance pass (step 16).
+        public const float BombRadius = 6f;          // blast reach from the bomb's centre (2 stone diameters)
+        public const int BombDamage = 2;             // dealt to every player stone in reach, the direct victim included
+        public const float BombKnockbackSpeed = 20f; // added to each victim's velocity, straight away from the bomb
+
         private readonly List<Puck> _pucks;
         private readonly Vector2 _boardMin;
         private readonly Vector2 _boardMax;
@@ -216,6 +221,23 @@ namespace Puckmite.Sim
 
             Puck p = _pucks[index];
             p.Velocity = velocity;
+            _pucks[index] = p;
+            return true;
+        }
+
+        /// <summary>Arms or disarms a sniper stone (design doc 4.3): armed, its first contact with a player
+        /// stone deals 2 instead of 1. The view arms the stone its owner rolls and disarms at roll end, so a
+        /// passive hit on the player's turn is always an ordinary 1. Returns false if not found.</summary>
+        public bool SetSniperArmed(int id, bool armed)
+        {
+            int index = IndexOf(id);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            Puck p = _pucks[index];
+            p.SniperArmed = armed;
             _pucks[index] = p;
             return true;
         }
@@ -582,10 +604,20 @@ namespace Puckmite.Sim
 
         // Circle-circle resolution: separate overlapping pucks along the contact normal (split by
         // inverse mass), then apply a normal impulse with restitution when they are approaching.
+        // Trait exceptions (design doc 4.3): an Anchor never moves and returns the full energy; a Bomb
+        // detonates on player contact instead of exchanging an impulse; an armed Sniper's first player
+        // contact deals 2.
         private void ResolvePuckPuck(int i, int j)
         {
             Puck a = _pucks[i];
             Puck b = _pucks[j];
+
+            // A bomb that already went off this step is out of the game; it must not keep shoving things
+            // around until the end-of-step removal collects it.
+            if ((a.Trait == StoneTrait.Bomb && a.Health <= 0) || (b.Trait == StoneTrait.Bomb && b.Health <= 0))
+            {
+                return;
+            }
 
             Vector2 delta = b.Position - a.Position;
             float distance = delta.magnitude;
@@ -595,8 +627,13 @@ namespace Puckmite.Sim
                 return; // not touching
             }
 
-            float invMassA = a.Mass > 0f ? 1f / a.Mass : 0f;
-            float invMassB = b.Mass > 0f ? 1f / b.Mass : 0f;
+            // The anchor stone is immovable in a collision (infinite mass), though it still travels
+            // normally when its own roll gave it velocity — mass only governs impulse exchange. Two
+            // anchors resolve as ordinary stones: with both immovable nothing could ever separate them,
+            // so a rolled anchor would pass through (and permanently overlap) a resting one.
+            bool bothAnchors = a.Trait == StoneTrait.Anchor && b.Trait == StoneTrait.Anchor;
+            float invMassA = a.Trait == StoneTrait.Anchor && !bothAnchors ? 0f : (a.Mass > 0f ? 1f / a.Mass : 0f);
+            float invMassB = b.Trait == StoneTrait.Anchor && !bothAnchors ? 0f : (b.Mass > 0f ? 1f / b.Mass : 0f);
             float invMassSum = invMassA + invMassB;
             if (invMassSum <= 0f)
             {
@@ -619,24 +656,61 @@ namespace Puckmite.Sim
             float velocityAlongNormal = Vector2.Dot(relativeVelocity, normal);
             if (velocityAlongNormal < 0f)
             {
-                float impulseMagnitude = -(1f + _restitution) * velocityAlongNormal / invMassSum;
+                // The anchor returns the collision energy in full: perfect restitution and no impact
+                // bleed, so the striker flies back with everything it arrived with (design doc 4.3).
+                // Anchor-vs-anchor is an ordinary collision (see bothAnchors above).
+                bool anchorInvolved = (a.Trait == StoneTrait.Anchor || b.Trait == StoneTrait.Anchor) && !bothAnchors;
+                float restitution = anchorInvolved ? 1f : _restitution;
+
+                float impulseMagnitude = -(1f + restitution) * velocityAlongNormal / invMassSum;
+
+                // A bomb meeting a player stone detonates instead of exchanging the impulse: the blast
+                // (not the contact) is what damages and shoves everything nearby, the bomb included.
+                bool aDetonates = a.Trait == StoneTrait.Bomb && b.Owner == PuckOwner.Player && a.Owner != b.Owner;
+                bool bDetonates = b.Trait == StoneTrait.Bomb && a.Owner == PuckOwner.Player && a.Owner != b.Owner;
+                if (aDetonates || bDetonates)
+                {
+                    _events.Add(PuckSimEvent.PuckCollision(a.Id, b.Id, impulseMagnitude));
+                    _pucks[i] = a;
+                    _pucks[j] = b;
+                    Explode(aDetonates ? i : j);
+                    return;
+                }
+
                 Vector2 impulse = normal * impulseMagnitude;
                 a.Velocity -= impulse * invMassA;
                 b.Velocity += impulse * invMassB;
 
                 // Feel knob (not physical): bleed a fraction of both pucks' speed on the impact so a
                 // collision always costs energy, even a glancing one. Applied once per impact (this
-                // branch only runs when the pucks are approaching).
-                a.Velocity *= _collisionSpeedKept;
-                b.Velocity *= _collisionSpeedKept;
+                // branch only runs when the pucks are approaching). Anchor hits skip it — full return.
+                if (!anchorInvolved)
+                {
+                    a.Velocity *= _collisionSpeedKept;
+                    b.Velocity *= _collisionSpeedKept;
+                }
 
-                // Cross-team impact costs each puck 1 health (design doc 3.3). Same-team collisions deal no
-                // damage (they yield XP instead — not yet implemented). Destruction is deferred to the end
-                // of the step so this step's collision physics is fully applied first (3.3 / 7.2).
+                // Cross-team impact costs each puck 1 health (design doc 3.3); an armed sniper's first
+                // player contact costs the victim 2 and disarms (design doc 4.3). Same-team collisions
+                // deal no damage. Destruction is deferred to the end of the step so this step's collision
+                // physics is fully applied first (3.3 / 7.2).
                 if (a.Owner != b.Owner)
                 {
-                    a.Health--;
-                    b.Health--;
+                    int damageToA = 1;
+                    int damageToB = 1;
+                    if (a.Trait == StoneTrait.Sniper && a.SniperArmed && b.Owner == PuckOwner.Player)
+                    {
+                        damageToB = 2;
+                        a.SniperArmed = false;
+                    }
+                    else if (b.Trait == StoneTrait.Sniper && b.SniperArmed && a.Owner == PuckOwner.Player)
+                    {
+                        damageToA = 2;
+                        b.SniperArmed = false;
+                    }
+
+                    a.Health -= damageToA;
+                    b.Health -= damageToB;
                 }
                 else
                 {
@@ -650,6 +724,43 @@ namespace Puckmite.Sim
 
             _pucks[i] = a;
             _pucks[j] = b;
+        }
+
+        // 자폭 (design doc 4.3): the bomb dies (removed with its PuckDestroyed event at step end, physics
+        // first as usual), and every PLAYER stone within reach — the direct victim included — takes the
+        // blast damage and is shoved straight away from the bomb. Enemy stones are untouched. Each victim's
+        // outcome depends only on its own position, so list order cannot affect the result.
+        private void Explode(int bombIndex)
+        {
+            Puck bomb = _pucks[bombIndex];
+            bomb.Health = 0;
+            _pucks[bombIndex] = bomb;
+
+            for (int k = 0; k < _pucks.Count; k++)
+            {
+                if (k == bombIndex)
+                {
+                    continue;
+                }
+
+                Puck p = _pucks[k];
+                if (p.Owner != PuckOwner.Player)
+                {
+                    continue;
+                }
+
+                Vector2 delta = p.Position - bomb.Position;
+                float distance = delta.magnitude;
+                if (distance > BombRadius)
+                {
+                    continue;
+                }
+
+                Vector2 direction = distance > 0f ? delta / distance : new Vector2(1f, 0f);
+                p.Health -= BombDamage;
+                p.Velocity += direction * BombKnockbackSpeed;
+                _pucks[k] = p;
+            }
         }
     }
 }

@@ -244,7 +244,9 @@ namespace Puckmite.View
             return copy;
         }
 
-        // Refills every puck to the current max health when the health slider changes (positions kept).
+        // Refills every puck to its own maximum when the health slider changes (positions kept). Per
+        // stone, not the flat slider value: enemy kinds carry different maxima (강석 +2, 반석 2), and a
+        // flat refill would hand the anchor invisible health beyond its two drawn arcs.
         private void ApplyHealthChangeIfNeeded()
         {
             if (_tuning.StoneHealth == _appliedHealth)
@@ -255,7 +257,7 @@ namespace Puckmite.View
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             for (int i = 0; i < pucks.Count; i++)
             {
-                _sim.SetHealth(pucks[i].Id, _tuning.StoneHealth);
+                _sim.SetHealth(pucks[i].Id, MaxStoneHealth(pucks[i]));
             }
 
             _appliedHealth = _tuning.StoneHealth;
@@ -307,10 +309,11 @@ namespace Puckmite.View
         }
 
         // Assigns each puck to a turn actor from the fixed roster: the player is actor 0 (owns all its
-        // stones); each enemy is its own actor (1, 2, 3, ...). Combat teams (Owner) are unchanged.
-        // The actor COUNT is declared by the scene, not derived from the stones — a stoneless actor
-        // (the stage-1 boss) would otherwise not exist at all and the run would be won on arrival.
-        private void AssignActors()
+        // stones); each enemy is its own actor (1, 2, 3, ...) — one stone per enemy here, which is why the
+        // battle scene (where an enemy type can field two stones, or none) overrides this with its own
+        // roster-order mapping. The actor COUNT is declared by the scene, not derived from the stones — a
+        // stoneless actor (the stage-1 boss) would otherwise not exist at all and be won-over on arrival.
+        protected virtual void AssignActors()
         {
             List<Puck> roster = InitialRoster();
             _actorOf = new int[RosterMaxId(roster) + 1];
@@ -369,11 +372,20 @@ namespace Puckmite.View
                 return;
             }
 
-            PuckOwner owner = actor == 0 ? PuckOwner.Player : PuckOwner.Enemy;
-            _ghost = new Puck(_handReady[actor][0], EntryPoint(actor, 0f), _tuning.PuckRadius, 1f, owner) { Health = _tuning.StoneHealth };
+            _ghost = CreateHandStone(actor, _handReady[actor][0]);
+            _ghost.Position = EntryPoint(actor, 0f);
             _ghostActive = true;
             _ghostBlocked = false;
             _ghostShown = false; // stays hidden until the cursor comes onto the board
+        }
+
+        /// <summary>A fresh stone for this actor's hand — full health, and whatever health/trait the
+        /// actor's kind carries (enemy types, design doc 4.3). Everything that turns a hand id into a
+        /// live stone (ghost, launch, AI template) must go through here or the kinds drift apart.</summary>
+        protected virtual Puck CreateHandStone(int actor, int id)
+        {
+            PuckOwner owner = actor == 0 ? PuckOwner.Player : PuckOwner.Enemy;
+            return new Puck(id, Vector2.zero, _tuning.PuckRadius, 1f, owner) { Health = _tuning.StoneHealth };
         }
 
         protected void ClearGhost()
@@ -488,8 +500,10 @@ namespace Puckmite.View
         {
             _handReady[_currentActor].Remove(_ghost.Id);
 
-            Puck stone = _ghost;
-            stone.Health = _tuning.StoneHealth;
+            // Rebuilt through the factory rather than copied off the ghost, so the entering stone carries
+            // its kind's health/trait even if the ghost struct went stale across a tuning change.
+            Puck stone = CreateHandStone(_currentActor, _ghost.Id);
+            stone.Position = _ghost.Position;
             stone.Velocity = velocity;
             _sim.AddPuck(stone);
 
@@ -520,7 +534,7 @@ namespace Puckmite.View
             _ghostView.transform.localPosition = position;
             _ghostView.transform.localScale = new Vector3(diameter, diameter, 1f);
 
-            Color body = OwnerColor(_ghost.Owner);
+            Color body = StoneColor(_ghost);
             body.a = _ghostBlocked ? 0.2f : 0.5f; // translucent: it is not on the board yet
             _ghostView.color = body;
             _ghostView.enabled = true;
@@ -686,6 +700,20 @@ namespace Puckmite.View
             return owner == PuckOwner.Player ? new Color(0.30f, 0.75f, 1f) : new Color(1f, 0.45f, 0.35f);
         }
 
+        /// <summary>The body colour a stone is drawn with. The battle scene tints special enemy stones
+        /// (sniper/bomb/anchor, design doc 4.3) so their behaviour is readable before they move.</summary>
+        protected virtual Color StoneColor(Puck p)
+        {
+            return OwnerColor(p.Owner);
+        }
+
+        /// <summary>A stone's full health, for the health-arc count. The battle scene answers per enemy
+        /// kind (강석형 +2, 반석형 2 — design doc 4.3).</summary>
+        protected virtual int MaxStoneHealth(Puck p)
+        {
+            return _tuning.StoneHealth;
+        }
+
         protected void BuildPuckViews()
         {
             _arcMaterial = new Material(Shader.Find("Sprites/Default"));
@@ -709,7 +737,7 @@ namespace Puckmite.View
 
                 SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
                 sr.sprite = ProceduralSprites.Circle();
-                sr.color = OwnerColor(p.Owner);
+                sr.color = StoneColor(p);
                 sr.sortingOrder = 10;
                 _puckViews[p.Id] = sr;
 
@@ -1017,7 +1045,7 @@ namespace Puckmite.View
         private void DrawHealthArcs(Puck p)
         {
             LineRenderer[] arcs = _healthArcs[p.Id];
-            int max = Mathf.Clamp(_tuning.StoneHealth, 1, MaxHealthArcs);
+            int max = Mathf.Clamp(MaxStoneHealth(p), 1, MaxHealthArcs);
             int current = Mathf.Clamp(p.Health, 0, max);
 
             float radius = p.Radius * 0.9f;

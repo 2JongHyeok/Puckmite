@@ -31,6 +31,14 @@ namespace Puckmite.Sim
         /// <summary>Where in the score ranking the pick lands: 0 = the best shot, 0.5 = the middle one.
         /// Deliberate imperfection for lower difficulties, still fully deterministic.</summary>
         public float PickRank;
+
+        /// <summary>저격형 (design doc 4.3): player stone ids this shot should hit FIRST, best target
+        /// first (the caller sorts by lowest health). Null or empty = ordinary planning. The bonuses
+        /// dwarf the normal weights, so the ranking becomes: first-contact the top target, else
+        /// first-contact any listed stone (better-ranked preferred), else touch as many listed stones as
+        /// possible — "맞출 수 있는 스톤 탐색, 안 되면 최대한 맞추도록". The cue is armed in every
+        /// roll-out so the 2-damage first hit is predicted too.</summary>
+        public IReadOnlyList<int> SnipePriority;
     }
 
     /// <summary>The shot the planner picked.</summary>
@@ -56,6 +64,13 @@ namespace Puckmite.Sim
     {
         private const float EntryFanHalfAngle = 80f * (MathF.PI / 180f); // fan spread around straight-inward
         private const int RolloutMaxSteps = 2000;
+
+        // Snipe bonuses (design doc 4.3), far above anything the normal weights can produce so the tiers
+        // never mix: first-contacting the top target beats first-contacting a lesser one, which beats
+        // merely brushing listed stones later in the roll-out.
+        private const float SnipeFirstContactBonus = 100000f;
+        private const float SnipeRankStep = 1000f;    // subtracted per priority rank below the top
+        private const float SnipeTouchBonus = 100f;   // per listed stone the cue contacts at all
 
         private struct Candidate
         {
@@ -116,10 +131,14 @@ namespace Puckmite.Sim
                         Vector2 velocity = direction * (maxPower * config.PowerFractions[p]);
                         PuckSim clone = sim.Clone();
                         clone.SetVelocity(id, velocity);
+                        if (HasSnipePriority(config))
+                        {
+                            clone.SetSniperArmed(id, true); // predict the armed 2-damage first hit too
+                        }
 
                         float score = config.FullRollout
-                            ? ScoreFullRollout(clone, sim, actingOwner, ownStoneIds, -1, newStone, occupancyThreshold, weights)
-                            : ScorePredictedRollout(clone, sim, actingOwner, ownStoneIds, id, cue.Health, false, occupancyThreshold, weights);
+                            ? ScoreFullRollout(clone, sim, actingOwner, ownStoneIds, id, -1, newStone, occupancyThreshold, weights, config)
+                            : ScorePredictedRollout(clone, sim, actingOwner, ownStoneIds, id, cue.Health, false, occupancyThreshold, weights, config);
                         AddCandidate(new EnemyPlan { UseNewStone = false, StoneId = id, Velocity = velocity, Score = score });
                     }
                 }
@@ -144,11 +163,15 @@ namespace Puckmite.Sim
                             Puck stone = newStone;
                             stone.Position = spot;
                             stone.Velocity = velocity;
+                            if (HasSnipePriority(config))
+                            {
+                                stone.SniperArmed = true; // predict the armed 2-damage first hit too
+                            }
                             clone.AddPuck(stone);
 
                             float score = config.FullRollout
-                                ? ScoreFullRollout(clone, sim, actingOwner, ownStoneIds, newStone.Id, newStone, occupancyThreshold, weights)
-                                : ScorePredictedRollout(clone, sim, actingOwner, ownStoneIds, newStone.Id, newStone.Health, true, occupancyThreshold, weights);
+                                ? ScoreFullRollout(clone, sim, actingOwner, ownStoneIds, newStone.Id, newStone.Id, newStone, occupancyThreshold, weights, config)
+                                : ScorePredictedRollout(clone, sim, actingOwner, ownStoneIds, newStone.Id, newStone.Health, true, occupancyThreshold, weights, config);
                             AddCandidate(new EnemyPlan
                             {
                                 UseNewStone = true,
@@ -182,29 +205,118 @@ namespace Puckmite.Sim
             _candidates.Add(new Candidate { Plan = candidate, Index = _candidates.Count });
         }
 
-        // Exact prediction: runs the clone to rest, cascades and all, and scores its final state against
+        private static bool HasSnipePriority(EnemyPlanConfig config)
+        {
+            return config.SnipePriority != null && config.SnipePriority.Count > 0;
+        }
+
+        // The snipe tiers (design doc 4.3), computed from the cue's first contact and every stone it
+        // touched during the roll-out. Zero when sniping is off.
+        private static float SnipeScore(EnemyPlanConfig config, int firstContactId, List<int> struckIds)
+        {
+            if (!HasSnipePriority(config))
+            {
+                return 0f;
+            }
+
+            float score = 0f;
+            IReadOnlyList<int> priority = config.SnipePriority;
+            for (int rank = 0; rank < priority.Count; rank++)
+            {
+                if (priority[rank] == firstContactId)
+                {
+                    score += SnipeFirstContactBonus - SnipeRankStep * rank;
+                    break;
+                }
+            }
+
+            for (int rank = 0; rank < priority.Count; rank++)
+            {
+                if (struckIds.Contains(priority[rank]))
+                {
+                    score += SnipeTouchBonus;
+                }
+            }
+
+            return score;
+        }
+
+        // Exact prediction: steps the clone to rest, cascades and all, and scores its final state against
         // the pre-shot sim — own buffs gained, damage dealt to the opposing team, own losses, and own
-        // stones parked on damage cells. launchedId is the entering stone's Id, or -1 for a cue shot.
+        // stones parked on damage cells. cueId is the stone being launched; launchedId is the entering
+        // stone's Id (health accounting), or -1 for a cue shot. The cue's contacts are tracked for the
+        // snipe tiers.
         private static float ScoreFullRollout(
             PuckSim clone,
             PuckSim before,
             PuckOwner actingOwner,
             IReadOnlyList<int> ownStoneIds,
+            int cueId,
             int launchedId,
             Puck newStone,
             float occupancyThreshold,
-            EnemyPlanWeights weights)
+            EnemyPlanWeights weights,
+            EnemyPlanConfig config)
         {
-            clone.RunToRest(RolloutMaxSteps);
+            _struckIds.Clear();
+            int firstContactId = -1;
 
-            float score = ScoreOwnPlacement(clone, ownStoneIds, launchedId, occupancyThreshold, weights);
+            // A bomb cue is built to be spent: its own death must not count as a loss, or every detonating
+            // shot ranks below parking in a corner and the bomber never bombs (검증에서 확인된 결함).
+            bool bombCue = clone.TryGetPuck(cueId, out Puck cueStartPuck) && cueStartPuck.Trait == StoneTrait.Bomb;
+
+            for (int step = 0; step < RolloutMaxSteps && !clone.AllAtRest(); step++)
+            {
+                IReadOnlyList<PuckSimEvent> events = clone.Step();
+                for (int i = 0; i < events.Count; i++)
+                {
+                    PuckSimEvent e = events[i];
+                    if (e.Type != PuckSimEventType.PuckCollision)
+                    {
+                        continue;
+                    }
+
+                    int other;
+                    if (e.PuckA == cueId)
+                    {
+                        other = e.PuckB;
+                    }
+                    else if (e.PuckB == cueId)
+                    {
+                        other = e.PuckA;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                    if (firstContactId < 0)
+                    {
+                        firstContactId = other;
+                    }
+
+                    if (!_struckIds.Contains(other))
+                    {
+                        _struckIds.Add(other);
+                    }
+                }
+            }
+
+            float score = SnipeScore(config, firstContactId, _struckIds)
+                + ScoreOwnPlacement(clone, ownStoneIds, launchedId, occupancyThreshold, weights);
 
             // Health deltas, compared against the pre-shot state. Opposing losses score up; own losses
-            // (including the launched stone, which started at the template's health) score down.
+            // (including the launched stone, which started at the template's health) score down — except
+            // a bomb cue, whose death is the point (see bombCue above).
             IReadOnlyList<Puck> pucksBefore = before.Pucks;
             for (int i = 0; i < pucksBefore.Count; i++)
             {
                 Puck was = pucksBefore[i];
+                if (bombCue && was.Id == cueId)
+                {
+                    continue;
+                }
+
                 int healthAfter = clone.TryGetPuck(was.Id, out Puck now) ? now.Health : 0;
                 int lost = was.Health - healthAfter;
                 if (was.Owner != actingOwner)
@@ -221,7 +333,7 @@ namespace Puckmite.Sim
                 }
             }
 
-            if (launchedId >= 0)
+            if (launchedId >= 0 && !bombCue)
             {
                 int launchedAfter = clone.TryGetPuck(launchedId, out Puck launched) ? launched.Health : 0;
                 score -= weights.OwnDamage * (newStone.Health - launchedAfter);
@@ -244,10 +356,17 @@ namespace Puckmite.Sim
             int cueStartHealth,
             bool cueIsNewStone,
             float occupancyThreshold,
-            EnemyPlanWeights weights)
+            EnemyPlanWeights weights,
+            EnemyPlanConfig config)
         {
             float score = 0f;
             _struckIds.Clear();
+            int firstContactId = -1;
+            bool sniperSpent = false; // the armed 2-damage hit goes to the first OPPOSING contact, like the sim's disarm
+
+            // A bomb cue is built to be spent: its own death must not count as a loss, or every detonating
+            // shot ranks below parking in a corner and the bomber never bombs (검증에서 확인된 결함).
+            bool bombCue = clone.TryGetPuck(cueId, out Puck cueStartPuck) && cueStartPuck.Trait == StoneTrait.Bomb;
 
             for (int step = 0; step < RolloutMaxSteps && !clone.AllAtRest(); step++)
             {
@@ -285,14 +404,32 @@ namespace Puckmite.Sim
 
                     _struckIds.Add(other);
 
-                    // The contact is foreseeable even though the scatter is not (pre-shot health is visible).
+                    // The contact is foreseeable even though the scatter is not (pre-shot health is
+                    // visible). An armed sniper's first opposing contact deals 2, and a bomb's direct
+                    // victim takes the blast damage (design doc 4.3).
                     if (before.TryGetPuck(other, out Puck hit) && hit.Owner != actingOwner)
                     {
-                        score += weights.DamageDealt;
-                        if (hit.Health <= 1)
+                        int contactDamage = 1;
+                        if (bombCue)
+                        {
+                            contactDamage = PuckSim.BombDamage;
+                        }
+                        else if (!sniperSpent && HasSnipePriority(config))
+                        {
+                            contactDamage = 2;
+                        }
+
+                        sniperSpent = true;
+                        score += weights.DamageDealt * contactDamage;
+                        if (hit.Health <= contactDamage)
                         {
                             score += weights.StoneDestroyed;
                         }
+                    }
+
+                    if (firstContactId < 0)
+                    {
+                        firstContactId = other;
                     }
 
                     clone.RemovePuck(other);
@@ -304,12 +441,17 @@ namespace Puckmite.Sim
                 }
             }
 
+            score += SnipeScore(config, firstContactId, _struckIds);
             score += ScoreOwnPlacement(clone, ownStoneIds, cueIsNewStone ? cueId : -1, occupancyThreshold, weights);
 
             // The only own loss the player could predict is the cue's: one health per cross-team contact,
             // already applied inside the clone. Struck own stones vanished — their fate is unknown, unscored.
-            int cueHealthAfter = clone.TryGetPuck(cueId, out Puck cueAfter) ? cueAfter.Health : 0;
-            score -= weights.OwnDamage * (cueStartHealth - cueHealthAfter);
+            // A spent bomb is not a loss (see bombCue above).
+            if (!bombCue)
+            {
+                int cueHealthAfter = clone.TryGetPuck(cueId, out Puck cueAfter) ? cueAfter.Health : 0;
+                score -= weights.OwnDamage * (cueStartHealth - cueHealthAfter);
+            }
 
             return score;
         }

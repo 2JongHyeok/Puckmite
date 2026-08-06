@@ -20,15 +20,15 @@ namespace Puckmite.View
         public float PowerScale = 6f;            // drag distance (world units) -> launch speed
         public float PowerCurve = 1f;            // drag->power exponent; 1 = linear
         public float PuckRadius = 1.5f;          // design doc: diameter 3 on a 5-wide cell
-        public int StoneHealth = 5;              // stone health (design doc 3~5, 미정); 1..8 via the debug panel
+        public int StoneHealth = 3;              // base stone health, player and enemy alike (사용자 지정 2026-08)
         public int CellDamage = 1;               // damage-cell settlement amount (문서 미정, 임시)
 
-        [Header("Character stats — temporary placeholders (values are 미정 in the design doc)")]
-        public int PlayerBaseHealth = 20;
-        public int PlayerBaseAttack = 2;
+        [Header("Character stats — 사용자 지정 기준선 (2026-08), 최종은 16단계에서")]
+        public int PlayerBaseHealth = 50;
+        public int PlayerBaseAttack = 3;
         public int PlayerBaseShield = 0;
         public int EnemyBaseHealth = 10;
-        public int EnemyBaseAttack = 1;
+        public int EnemyBaseAttack = 3;
         public int EnemyBaseShield = 0;
 
         [Header("Boss — stage 1 (사용자 지정 HP 100 / ATK 10; 최종은 16단계에서)")]

@@ -24,8 +24,9 @@ namespace Puckmite.View
         private const float CharStatHeight = 5f;     // its box height (name + HP + ATK + SHD + STONES lines)
         private const float CharSpread = 9f;         // x of the leftmost/rightmost character
 
-        // Cell-occupancy highlights: pool cap (6 pucks * up to 4 cells, with margin).
-        private const int MaxCellHighlights = 30;
+        // Cell-occupancy highlights: up to 4 cells per stone (radius 1.5 on 5-wide cells). The pool is
+        // sized from the roster at build — the twin kind and bought battle stones outgrew a fixed cap.
+        private const int MaxCellsPerStone = 4;
 
         // The enemy-hover link ring (design doc 4.1), outside the other rings so a stone can wear both at
         // once (its owner's turn ring and the hover link) and still read as two.
@@ -120,6 +121,87 @@ namespace Puckmite.View
         // bosses are built.
         private static bool IsStage1Boss => Campaign.IsBossRun && Campaign.Stage == 1;
 
+        // The seven enemy kinds plus the plain one (design doc 4.3). Stats and stone specs are the user's
+        // draft numbers, finalised in the balance pass (step 16); which kind appears where is rolled per
+        // run HERE in the view, so the sim stays deterministic.
+        private enum EnemyType
+        {
+            Basic,
+            Striker,   // 강공형: hits hard, folds fast
+            Tank,      // 중갑형: bulk over punch
+            Twin,      // 쌍석형: fields two stones
+            Sniper,    // 저격형: its rolls hunt the weakest player stone
+            HardStone, // 강석형: stones carry +2 health
+            Bomber,    // 자폭형: a bomb stone, rolled every second turn
+            Anchor,    // 반석형: immovable stone that returns the blow in full, 2 health
+        }
+
+        private EnemyType[] _actorTypes;   // actor -> kind, rolled once per Build; [0] is the player, never read
+        private int[] _actorTurnCounts;    // turns each actor has taken this run (the bomber's cadence)
+        private readonly List<int> _rosterActors = new List<int>(); // actor of each roster entry, filled by InitialRoster
+        private readonly List<int> _snipePriority = new List<int>(); // reused per sniper plan
+
+        private int TypeBaseHealth(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.Striker: return 5;  // 사용자 지정 HP 5 / ATK 5
+                case EnemyType.Tank: return 20;    // 사용자 지정 HP 20 / ATK 2
+                default: return _tuning.EnemyBaseHealth;
+            }
+        }
+
+        private int TypeBaseAttack(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.Striker: return 5;
+                case EnemyType.Tank: return 2;
+                default: return _tuning.EnemyBaseAttack;
+            }
+        }
+
+        private static int TypeStoneCount(EnemyType type)
+        {
+            return type == EnemyType.Twin ? 2 : 1;
+        }
+
+        private int TypeStoneHealth(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.HardStone: return _tuning.StoneHealth + 2;
+                case EnemyType.Anchor: return Mathf.Max(1, _tuning.StoneHealth - 1); // 2 at the base 3 (사용자 지정)
+                default: return _tuning.StoneHealth;
+            }
+        }
+
+        private static StoneTrait TypeStoneTrait(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.Sniper: return StoneTrait.Sniper;
+                case EnemyType.Bomber: return StoneTrait.Bomb;
+                case EnemyType.Anchor: return StoneTrait.Anchor;
+                default: return StoneTrait.None;
+            }
+        }
+
+        private static string TypeLabel(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.Striker: return "Striker";
+                case EnemyType.Tank: return "Tank";
+                case EnemyType.Twin: return "Twin";
+                case EnemyType.Sniper: return "Sniper";
+                case EnemyType.HardStone: return "Hard";
+                case EnemyType.Bomber: return "Bomber";
+                case EnemyType.Anchor: return "Anchor";
+                default: return "";
+            }
+        }
+
         // --- Scene wiring -------------------------------------------------------------------------
 
         protected override void BuildMode()
@@ -138,27 +220,97 @@ namespace Puckmite.View
             UpdateCharacterStats();
         }
 
-        // Every stone in the current run. The enemy count is the run's (design doc 2.1); each enemy gets
-        // one stone, since per-enemy counts are 미정 (10.1). Battle stones bought in shops add to the
-        // player's count until the campaign is lost (design doc 5.6).
+        // Every stone in the current run, with the actor of each entry recorded in _rosterActors in
+        // lock-step (enemy kinds field different counts — the twin two, the stage-1 boss none — so the
+        // one-stone-per-enemy mapping of the base class no longer holds). Battle stones bought in shops
+        // add to the player's count until the campaign is lost (design doc 5.6).
         protected override List<Puck> InitialRoster()
         {
             List<Puck> roster = new List<Puck>();
+            _rosterActors.Clear();
 
             int playerStones = _tuning.PlayerStoneCount + Campaign.ExtraBattleStones;
             for (int i = 0; i < playerStones; i++)
             {
                 roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Player) { Health = _tuning.StoneHealth });
+                _rosterActors.Add(0);
             }
 
             // The stage-1 boss fields no stones at all — its turns cast board-warping abilities instead.
-            int enemies = IsStage1Boss ? 0 : Campaign.EnemyCountForRun;
-            for (int i = 0; i < enemies; i++)
+            if (!IsStage1Boss)
             {
-                roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Enemy) { Health = _tuning.StoneHealth });
+                int enemies = Campaign.EnemyCountForRun;
+                for (int actor = 1; actor <= enemies; actor++)
+                {
+                    EnemyType type = _actorTypes[actor];
+                    int stones = TypeStoneCount(type);
+                    for (int s = 0; s < stones; s++)
+                    {
+                        roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Enemy)
+                        {
+                            Health = TypeStoneHealth(type),
+                            Trait = TypeStoneTrait(type),
+                        });
+                        _rosterActors.Add(actor);
+                    }
+                }
             }
 
             return roster;
+        }
+
+        // The base mapping assumes one stone per enemy; here the roster carries its own actor list.
+        protected override void AssignActors()
+        {
+            RollEnemyTypes();
+
+            List<Puck> roster = InitialRoster(); // fills _rosterActors in lock-step
+            _actorOf = new int[RosterMaxId(roster) + 1];
+            for (int i = 0; i < roster.Count; i++)
+            {
+                _actorOf[roster[i].Id] = _rosterActors[i];
+            }
+
+            _actorCount = DeclaredActorCount();
+            _currentActor = 0;
+            _hasRolledThisTurn = false;
+        }
+
+        // Which kind each enemy actor is this run (design doc 4.3): plain enemies until stage 1 run 3,
+        // the full pool from there on (사용자 지정). Boss runs stay out of the pool — stage 1 has its own
+        // boss, stages 2-3 keep the plain placeholder. Rolled once per Build; the dice live in the view.
+        private void RollEnemyTypes()
+        {
+            int enemies = Campaign.EnemyCountForRun;
+            _actorTypes = new EnemyType[1 + enemies];
+            for (int actor = 1; actor <= enemies; actor++)
+            {
+                _actorTypes[actor] = RollEnemyType(enemies);
+            }
+        }
+
+        private EnemyType RollEnemyType(int enemiesThisRun)
+        {
+            if (Campaign.IsBossRun)
+            {
+                return EnemyType.Basic;
+            }
+
+            if (Campaign.Stage == 1 && Campaign.Run < 3)
+            {
+                return EnemyType.Basic;
+            }
+
+            // 자폭형 is never fielded alone (사용자 지정): a single-enemy run draws uniformly from the
+            // other seven kinds — a roll landing on Bomber's slot takes the one value the shortened
+            // range cannot reach, keeping every kind at 1/7.
+            if (enemiesThisRun == 1)
+            {
+                int roll = Random.Range(0, 7);
+                return roll == (int)EnemyType.Bomber ? EnemyType.Anchor : (EnemyType)roll;
+            }
+
+            return (EnemyType)Random.Range(0, 8); // uniform over Basic + the seven kinds
         }
 
         // Player + this run's enemies — declared, not derived from stones, so the stoneless boss still
@@ -166,6 +318,41 @@ namespace Puckmite.View
         protected override int DeclaredActorCount()
         {
             return 1 + Campaign.EnemyCountForRun;
+        }
+
+        // Enemy hand stones carry their kind's health and trait (design doc 4.3).
+        protected override Puck CreateHandStone(int actor, int id)
+        {
+            if (actor == 0)
+            {
+                return base.CreateHandStone(actor, id);
+            }
+
+            EnemyType type = _actorTypes[actor];
+            return new Puck(id, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Enemy)
+            {
+                Health = TypeStoneHealth(type),
+                Trait = TypeStoneTrait(type),
+            };
+        }
+
+        // Health arcs are drawn against the stone's own maximum (강석형 5, 반석형 2 at the base 3).
+        protected override int MaxStoneHealth(Puck p)
+        {
+            int actor = p.Id >= 0 && p.Id < _actorOf.Length ? _actorOf[p.Id] : 0;
+            return actor == 0 || _actorTypes == null ? _tuning.StoneHealth : TypeStoneHealth(_actorTypes[actor]);
+        }
+
+        // Special stones wear their behaviour's colour so it reads before they ever move (design doc 4.3).
+        protected override Color StoneColor(Puck p)
+        {
+            switch (p.Trait)
+            {
+                case StoneTrait.Sniper: return new Color(0.95f, 0.35f, 0.62f);
+                case StoneTrait.Bomb: return new Color(1f, 0.72f, 0.20f);
+                case StoneTrait.Anchor: return new Color(0.62f, 0.62f, 0.68f);
+                default: return OwnerColor(p.Owner);
+            }
         }
 
         // The entry edge: the player's new stones come in on the left, an enemy's on the right, hugging that
@@ -272,6 +459,8 @@ namespace Puckmite.View
             {
                 if (!_actorDead[_currentActor])
                 {
+                    _actorTurnCounts[_currentActor]++; // the bomber's cadence counts taken turns only
+
                     PromoteHand(_currentActor);    // playable from this turn on (design doc 3.3)
                     ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                     SettleCurrentActor();          // stones lost here go back to the hand as pending
@@ -285,6 +474,17 @@ namespace Puckmite.View
                         CastBossAbility();
                         _noStoneTurn = true;
                         _noStoneTimer = _tuning.NoStoneTurnDelay;
+                        return;
+                    }
+
+                    // 자폭형 (design doc 4.3): its bomb flies only every second turn — on the off turns it
+                    // holds and just takes its forced attack (the no-stone beat carries the turn there).
+                    if (_currentActor != 0 && _actorTypes[_currentActor] == EnemyType.Bomber
+                        && _actorTurnCounts[_currentActor] % 2 == 0)
+                    {
+                        _noStoneTurn = true;
+                        _noStoneTimer = _tuning.NoStoneTurnDelay;
+                        _attackLog = $"{ActorName(_currentActor)} holds its bomb — attacking.";
                         return;
                     }
 
@@ -314,8 +514,23 @@ namespace Puckmite.View
         // Moves to the next actor and begins its turn.
         private void AdvanceTurn()
         {
+            DisarmSnipers(); // the armed 2-damage hit lives and dies with its owner's roll (design doc 4.3)
             _currentActor = (_currentActor + 1) % _actorCount;
             StartTurn();
+        }
+
+        // A sniper stone whose roll ended without a player contact must not carry the bonus into later
+        // turns — the player striking it is always an ordinary 1.
+        private void DisarmSnipers()
+        {
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if (pucks[i].Trait == StoneTrait.Sniper && pucks[i].SniperArmed)
+                {
+                    _sim.SetSniperArmed(pucks[i].Id, false);
+                }
+            }
         }
 
         // Applies one round of damage-cell settlement to the current actor's own stones (design doc 3.4/3.5).
@@ -365,9 +580,15 @@ namespace Puckmite.View
                 return "Player";
             }
 
-            // The boss run fields a single enemy (design doc 2.1); its stats are still an ordinary enemy's
-            // until the boss itself is built, so this is a label and nothing more.
-            return Campaign.IsBossRun ? "Boss" : $"Enemy {actor}";
+            if (Campaign.IsBossRun)
+            {
+                // Stage-1 boss is real; stages 2-3 still wear the label over ordinary stats.
+                return "Boss";
+            }
+
+            // The kind label doubles as the type indicator until real sprites arrive (사용자 예정).
+            EnemyType type = _actorTypes != null && actor < _actorTypes.Length ? _actorTypes[actor] : EnemyType.Basic;
+            return type == EnemyType.Basic ? $"Enemy {actor}" : $"Enemy {actor} ({TypeLabel(type)})";
         }
 
         // --- Input --------------------------------------------------------------------------------
@@ -394,6 +615,14 @@ namespace Puckmite.View
             // The AI owns the enemies' turns: keep the cursor from grabbing their stones or their ghost.
             // With the AI off this falls through to the existing hot-seat input.
             if (_tuning.EnemyAiEnabled && _currentActor != 0)
+            {
+                return;
+            }
+
+            // A scripted beat (a no-stone turn, the boss's cast, the bomber's hold) takes no input at all:
+            // in hot-seat the bomber still has grabbable stones during its hold turn, and rolling one
+            // would race the beat's timer into a mid-flight buff capture and a stolen roll.
+            if (_noStoneTurn)
             {
                 return;
             }
@@ -700,7 +929,8 @@ namespace Puckmite.View
             _planEntrySpots.Clear();
             if (hasNewStone)
             {
-                template = new Puck(_handReady[_currentActor][0], Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Enemy) { Health = _tuning.StoneHealth };
+                // Through the hand-stone factory, so the entering stone carries its kind's health/trait.
+                template = CreateHandStone(_currentActor, _handReady[_currentActor][0]);
 
                 const int EntrySpotCount = 5;
                 CollectFreeEntrySpots(_currentActor, _entryScanScratch);
@@ -740,6 +970,13 @@ namespace Puckmite.View
                 PickRank = AiPickRank[difficulty],
             };
 
+            // 저격형 (design doc 4.3): its roll hunts the player's weakest stone — priority sorted by
+            // health, then Id (deterministic tie-break), handed to the planner's snipe tiers.
+            if (_actorTypes[_currentActor] == EnemyType.Sniper)
+            {
+                config.SnipePriority = BuildSnipePriority();
+            }
+
             bool planned = EnemyPlanner.TryPlan(
                 _sim, PuckOwner.Enemy, _planOwnIds, hasNewStone, template, _planEntrySpots,
                 _tuning.MaxPower, OccupancyThreshold, weights, config, out EnemyPlan plan);
@@ -772,8 +1009,38 @@ namespace Puckmite.View
                 _sim.SetVelocity(plan.StoneId, plan.Velocity);
             }
 
+            // The sniper's rolled stone is armed for its 2-damage first player contact; AdvanceTurn
+            // disarms whatever the roll leaves armed (design doc 4.3).
+            if (_actorTypes[_currentActor] == EnemyType.Sniper)
+            {
+                _sim.SetSniperArmed(plan.StoneId, true);
+            }
+
             ResetAccumulator();
             _hasRolledThisTurn = true; // the normal roll-finished flow takes over from here
+        }
+
+        // Player stones sorted weakest-first (Id breaks ties) — the snipe order (design doc 4.3).
+        private IReadOnlyList<int> BuildSnipePriority()
+        {
+            _snipePriority.Clear();
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if (pucks[i].Owner == PuckOwner.Player)
+                {
+                    _snipePriority.Add(pucks[i].Id);
+                }
+            }
+
+            _snipePriority.Sort((x, y) =>
+            {
+                _sim.TryGetPuck(x, out Puck px);
+                _sim.TryGetPuck(y, out Puck py);
+                return px.Health != py.Health ? px.Health.CompareTo(py.Health) : x.CompareTo(y);
+            });
+
+            return _snipePriority;
         }
 
         // --- Character combat (design doc 3.5 step 4, 3.6, 3.8) --------------------------------------
@@ -983,7 +1250,7 @@ namespace Puckmite.View
                 return _tuning.PlayerBaseHealth + Campaign.BonusMaxHealth;
             }
 
-            return IsStage1Boss ? _tuning.BossBaseHealth : _tuning.EnemyBaseHealth;
+            return IsStage1Boss ? _tuning.BossBaseHealth : TypeBaseHealth(_actorTypes[actor]);
         }
 
         private int BaseAttack(int actor)
@@ -993,7 +1260,7 @@ namespace Puckmite.View
                 return _tuning.PlayerBaseAttack + Campaign.BonusAttack;
             }
 
-            return IsStage1Boss ? _tuning.BossBaseAttack : _tuning.EnemyBaseAttack;
+            return IsStage1Boss ? _tuning.BossBaseAttack : TypeBaseAttack(_actorTypes[actor]);
         }
 
         private int BaseShield(int actor)
@@ -1159,8 +1426,9 @@ namespace Puckmite.View
 
         private void BuildCellHighlights()
         {
-            _cellHighlights = new SpriteRenderer[MaxCellHighlights];
-            for (int i = 0; i < MaxCellHighlights; i++)
+            int cap = InitialRoster().Count * MaxCellsPerStone;
+            _cellHighlights = new SpriteRenderer[cap];
+            for (int i = 0; i < cap; i++)
             {
                 GameObject go = new GameObject($"CellHighlight{i}");
                 go.transform.SetParent(transform, false);
@@ -1222,6 +1490,7 @@ namespace Puckmite.View
             _actorBaseShield = new int[_actorCount];
             _actorEffectShield = new int[_actorCount];
             _actorDead = new bool[_actorCount];
+            _actorTurnCounts = new int[_actorCount];
             _handReady = new List<int>[_actorCount];
             _handPending = new List<int>[_actorCount];
             for (int actor = 0; actor < _actorCount; actor++)
