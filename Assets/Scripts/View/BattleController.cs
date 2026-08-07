@@ -1013,7 +1013,7 @@ namespace Puckmite.View
             if (!planned)
             {
                 // StartTurn routes turns with nothing to roll to the no-stone path, so this is unexpected.
-                Debug.LogError($"[Puckmite] Enemy AI found no shot for {ActorName(_currentActor)}; ending its turn.");
+                Debug.LogError($"[PuckHero] Enemy AI found no shot for {ActorName(_currentActor)}; ending its turn.");
                 _noStoneTurn = true;
                 _noStoneTimer = 0f;
                 return;
@@ -1868,7 +1868,7 @@ namespace Puckmite.View
 
             GUILayout.BeginArea(GameHudRect, GUI.skin.box);
 
-            GUILayout.Label($"Puckmite — {RunLabel()}");
+            GUILayout.Label($"PuckHero — {RunLabel()}");
             GUILayout.Label(_gameOver ? $"** {_gameOverText} **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
 
             // The shop opens straight after a cleared run and is the only way on (design doc 2.1).

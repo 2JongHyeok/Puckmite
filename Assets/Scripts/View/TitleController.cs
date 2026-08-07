@@ -6,7 +6,7 @@ namespace Puckmite.View
     /// under it. Starting is always a fresh campaign.</summary>
     public sealed class TitleController : SimpleScreenController
     {
-        protected override string Heading => "Puckmite";
+        protected override string Heading => "PuckHero";
         protected override string ButtonLabel => "게임 시작";
 
         protected override void OnButton()

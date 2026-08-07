@@ -26,7 +26,7 @@ namespace Puckmite.EditorTools
         private const string LegacyScriptPath = "Assets/Scripts/View/PuckmitePlaytest.cs";
         private const string LegacyMenuPath = "Assets/Editor/PuckmitePlaytestMenu.cs";
 
-        [MenuItem("Tools/Puckmite/Setup Game Scenes")]
+        [MenuItem("Tools/PuckHero/Setup Game Scenes")]
         public static void SetupGameScenes()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
@@ -51,9 +51,12 @@ namespace Puckmite.EditorTools
                 new EditorBuildSettingsScene(GameClearPath, true),
             };
 
+            // The name a player sees on the build's window title (the project default was "My project").
+            PlayerSettings.productName = "PuckHero";
+
             AssetDatabase.SaveAssets();
             EditorSceneManager.OpenScene(TitlePath, OpenSceneMode.Single);
-            Debug.Log("[Puckmite] All five scenes ready and in Build Settings. Press Play in Title.");
+            Debug.Log("[PuckHero] All five scenes ready and in Build Settings. Press Play in Title.");
         }
 
         private static void EnsureTuningAsset()
@@ -98,7 +101,7 @@ namespace Puckmite.EditorTools
             GameTuning tuning = AssetDatabase.LoadAssetAtPath<GameTuning>(TuningPath);
             if (tuning == null)
             {
-                Debug.LogError($"[Puckmite] {TuningPath} could not be loaded — scene '{rootName}' is left unwired.");
+                Debug.LogError($"[PuckHero] {TuningPath} could not be loaded — scene '{rootName}' is left unwired.");
                 return;
             }
 
@@ -112,7 +115,7 @@ namespace Puckmite.EditorTools
             // surfacing as a null-reference error the next time someone presses Play.
             if (new SerializedObject(controller).FindProperty("_tuning").objectReferenceValue == null)
             {
-                Debug.LogError($"[Puckmite] Wiring did not stick in '{rootName}' — the tuning reference saved as null.");
+                Debug.LogError($"[PuckHero] Wiring did not stick in '{rootName}' — the tuning reference saved as null.");
             }
         }
 
@@ -147,7 +150,7 @@ namespace Puckmite.EditorTools
             if (property == null)
             {
                 // A silent miss here would resurface later as a "not assigned" error at Play time.
-                Debug.LogError($"[Puckmite] {target.GetType().Name} has no serialized field '{field}' — wiring skipped.");
+                Debug.LogError($"[PuckHero] {target.GetType().Name} has no serialized field '{field}' — wiring skipped.");
                 return;
             }
 
@@ -159,13 +162,13 @@ namespace Puckmite.EditorTools
         // re-baselines the numbers (2026-08: player 50/3, enemy 10/3, stone health 3), the asset has to be
         // updated through the API (project rule: no hand-editing Unity YAML). Touches only these fields;
         // every other slider tweak in the asset survives.
-        [MenuItem("Tools/Puckmite/Apply Stat Baseline (2026-08)")]
+        [MenuItem("Tools/PuckHero/Apply Stat Baseline (2026-08)")]
         public static void ApplyStatBaseline()
         {
             GameTuning tuning = AssetDatabase.LoadAssetAtPath<GameTuning>(TuningPath);
             if (tuning == null)
             {
-                Debug.LogError("[Puckmite] GameTuning.asset not found — run Tools/Puckmite/Setup Game Scenes first.");
+                Debug.LogError("[PuckHero] GameTuning.asset not found — run Tools/PuckHero/Setup Game Scenes first.");
                 return;
             }
 
@@ -176,12 +179,12 @@ namespace Puckmite.EditorTools
             tuning.StoneHealth = 3;
             EditorUtility.SetDirty(tuning);
             AssetDatabase.SaveAssets();
-            Debug.Log("[Puckmite] Stat baseline applied: player 50/3, enemy 10/3, stone health 3.");
+            Debug.Log("[PuckHero] Stat baseline applied: player 50/3, enemy 10/3, stone health 3.");
         }
 
         // One-time cleanup, run only after the new scenes are verified: AssetDatabase handles the .meta
         // files, so nothing is left dangling.
-        [MenuItem("Tools/Puckmite/Delete Legacy Playtest")]
+        [MenuItem("Tools/PuckHero/Delete Legacy Playtest")]
         public static void DeleteLegacyPlaytest()
         {
             bool confirmed = EditorUtility.DisplayDialog(
@@ -200,7 +203,7 @@ namespace Puckmite.EditorTools
             {
                 if (!File.Exists(BattlePath))
                 {
-                    Debug.LogError("[Puckmite] Run Tools/Puckmite/Setup Game Scenes first.");
+                    Debug.LogError("[PuckHero] Run Tools/PuckHero/Setup Game Scenes first.");
                     return;
                 }
 
@@ -215,7 +218,7 @@ namespace Puckmite.EditorTools
             DeleteIfPresent(LegacyScenePath);
             DeleteIfPresent(LegacyScriptPath);
             DeleteIfPresent(LegacyMenuPath);
-            Debug.Log("[Puckmite] Legacy playtest removed.");
+            Debug.Log("[PuckHero] Legacy playtest removed.");
         }
 
         private static void DeleteIfPresent(string path)

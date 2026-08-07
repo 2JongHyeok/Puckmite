@@ -44,7 +44,7 @@ namespace Puckmite.View
         {
             if (_tuning == null || _arena == null)
             {
-                Debug.LogError("[Puckmite] DebugPanel is missing its references — run Tools/Puckmite/Setup Game Scenes.");
+                Debug.LogError("[PuckHero] DebugPanel is missing its references — run Tools/PuckHero/Setup Game Scenes.");
                 enabled = false;
             }
         }

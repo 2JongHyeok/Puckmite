@@ -17,7 +17,7 @@ namespace Puckmite.View
     /// </summary>
     public abstract class ArenaControllerBase : MonoBehaviour
     {
-        // Every tunable number lives in one shared asset (wired by Tools/Puckmite/Setup Game Scenes) so the
+        // Every tunable number lives in one shared asset (wired by Tools/PuckHero/Setup Game Scenes) so the
         // battle and shop scenes can never drift apart. Serialized, so it survives a domain reload and is
         // readable in a subclass's Awake before base.Awake runs.
         [SerializeField] protected GameTuning _tuning;
@@ -128,7 +128,7 @@ namespace Puckmite.View
         {
             if (_tuning == null)
             {
-                Debug.LogError("[Puckmite] GameTuning asset is not assigned — run Tools/Puckmite/Setup Game Scenes.");
+                Debug.LogError("[PuckHero] GameTuning asset is not assigned — run Tools/PuckHero/Setup Game Scenes.");
                 enabled = false;
                 return;
             }

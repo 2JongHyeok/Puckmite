@@ -10,11 +10,11 @@ namespace Puckmite.EditorTools
     /// Editor entry point that runs <see cref="PuckSimVerification"/>'s headless self-checks. Prints a
     /// single PASS line when everything passes; on any failure it logs an error listing only the failed
     /// checks, so problems stand out without scrolling past the passing ones. Not a MonoBehaviour and
-    /// touches no scene; runnable via Tools/Puckmite/Run Sim Verification.
+    /// touches no scene; runnable via Tools/PuckHero/Run Sim Verification.
     /// </summary>
     public static class PuckSimVerificationRunner
     {
-        [MenuItem("Tools/Puckmite/Run Sim Verification")]
+        [MenuItem("Tools/PuckHero/Run Sim Verification")]
         public static void Run()
         {
             IReadOnlyList<PuckSimVerification.CheckResult> results = PuckSimVerification.RunAll();
@@ -30,12 +30,12 @@ namespace Puckmite.EditorTools
 
             if (passed == results.Count)
             {
-                Debug.Log($"[Puckmite] Sim verification: {passed}/{results.Count} PASS");
+                Debug.Log($"[PuckHero] Sim verification: {passed}/{results.Count} PASS");
                 return;
             }
 
             StringBuilder report = new StringBuilder();
-            report.AppendLine($"[Puckmite] Sim verification: {passed}/{results.Count} PASS — failures:");
+            report.AppendLine($"[PuckHero] Sim verification: {passed}/{results.Count} PASS — failures:");
             foreach (PuckSimVerification.CheckResult result in results)
             {
                 if (!result.Passed)
