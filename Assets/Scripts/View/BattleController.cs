@@ -82,6 +82,14 @@ namespace Puckmite.View
         // in builds, which a runtime Shader.Find would not.
         [SerializeField] private Material _silhouetteMaterial;
 
+        // Victory panel art (promised paths UI/VictoryPanel·VictoryButton·Gold — 디자인은 사용자가 추후).
+        [SerializeField] private Sprite _victoryPanelSprite;
+        [SerializeField] private Sprite _victoryButtonSprite;
+        [SerializeField] private Sprite _goldIconSprite;
+
+        private VictoryPanel _victoryPanel;
+        private int _goldEarnedThisRun; // kill gold this run, for the victory panel's line and its double pick
+
         // Top character row (design doc 2.2). Each actor's buff is a snapshot taken when its own turn
         // ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
         private TextMeshPro[][] _statRowTexts;     // [actor][row]: the number next to each stat icon
@@ -131,7 +139,6 @@ namespace Puckmite.View
         private SpriteRenderer[] _cellHighlights;                    // pool of occupied-cell overlays
         private readonly List<int> _occupiedCells = new List<int>(); // reused per puck each frame
 
-        private bool _runCleared;           // run won: waiting on the enter-shop button
         private bool _campaignCleared;
 
         // Defeat and the campaign clear hand over to their end screens (사용자 지정) after this beat, so
@@ -257,6 +264,7 @@ namespace Puckmite.View
             BuildTurnRings();
             BuildHoverRings();
             BuildCharacters();
+            BuildVictoryPanel();
             BuildGhost();
             BuildPreviewLine();
             BuildPreviewMarker();
@@ -513,6 +521,14 @@ namespace Puckmite.View
             UpdateGhost();
             UpdateHoverHighlight(); // before the character row, which reads the hovered enemy
             UpdateCharacterStats();
+
+            // The victory panel runs its own pointer work: board input is already dead (_gameOver).
+            if (_victoryPanel != null && _victoryPanel.IsShown && Mouse.current != null)
+            {
+                Vector2 panelScreen = Mouse.current.position.ReadValue();
+                _victoryPanel.Tick(Time.deltaTime, ScreenToWorld(panelScreen),
+                    Mouse.current.leftButton.wasPressedThisFrame, PointerOverHud(panelScreen));
+            }
         }
 
         // --- Turn structure -----------------------------------------------------------------------
@@ -1184,7 +1200,6 @@ namespace Puckmite.View
 
             _awaitingAttack = false;
             _gameOver = false;
-            _runCleared = false;
             _campaignCleared = false;
             _gameOverText = "";
             _attackLog = "";
@@ -1260,6 +1275,7 @@ namespace Puckmite.View
             if (actor != 0)
             {
                 Campaign.Gold += _tuning.GoldPerKill; // gold comes from taking enemies down (design doc 5.6)
+                _goldEarnedThisRun += _tuning.GoldPerKill;
             }
 
             _actorDead[actor] = true;
@@ -1321,7 +1337,6 @@ namespace Puckmite.View
         private void ClearRun()
         {
             _gameOver = true;
-            _runCleared = true;
 
             // Only the next run's figure moves; RunStartHealth stays put so restarting this run is still
             // worth what it was. CampaignState.AdvanceRun (leaving the shop) is what promotes it.
@@ -1340,6 +1355,38 @@ namespace Puckmite.View
             _gameOverText = lastRun
                 ? $"Stage {Campaign.Stage} cleared. Healed to {Campaign.NextRunHealth}."
                 : $"Run {Campaign.Stage}-{Campaign.Run} cleared. Healed to {Campaign.NextRunHealth}.";
+
+            _victoryPanel.Show(_goldEarnedThisRun); // its 상점으로 button is the way on (design doc 2.1)
+        }
+
+        // The victory panel: built hidden with the fixed picks' numbers, shown by ClearRun. The panel is
+        // pure view — the effects live here, on the campaign the controller already owns.
+        private void BuildVictoryPanel()
+        {
+            _victoryPanel = new VictoryPanel(transform, _victoryPanelSprite, _victoryButtonSprite, _goldIconSprite, VictoryHealAmount());
+            _victoryPanel.HealChosen = ApplyVictoryHeal;
+            _victoryPanel.GoldChosen = ApplyVictoryGold;
+            _victoryPanel.ShopChosen = GameFlow.LoadShop;
+        }
+
+        private int VictoryHealAmount()
+        {
+            return Mathf.CeilToInt(BaseHealth(0) * 0.2f);
+        }
+
+        // Victory pick 1: a fifth of max health onto the carry-over figure (capped at max). Written to
+        // the shown health too, so the stat row ticks up the moment it is picked.
+        private void ApplyVictoryHeal()
+        {
+            Campaign.NextRunHealth = Mathf.Min(Campaign.NextRunHealth + VictoryHealAmount(), BaseHealth(0));
+            _actorHealth[0] = Campaign.NextRunHealth;
+        }
+
+        // Victory pick 2: the run's kill gold once more — double in total; the panel's line shows the sum.
+        private void ApplyVictoryGold()
+        {
+            Campaign.Gold += _goldEarnedThisRun;
+            _victoryPanel.SetGoldAmount(_goldEarnedThisRun * 2);
         }
 
         private string RunLabel()
@@ -2121,15 +2168,9 @@ namespace Puckmite.View
             GUILayout.Label($"PuckHero — {RunLabel()}");
             GUILayout.Label(_gameOver ? $"** {_gameOverText} **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
 
-            // The shop opens straight after a cleared run and is the only way on (design doc 2.1).
-            // Defeat and the campaign clear need no button — their end screens load themselves.
-            if (_runCleared && !_campaignCleared)
-            {
-                if (GUILayout.Button("Enter shop  ▶"))
-                {
-                    GameFlow.LoadShop();
-                }
-            }
+            // The shop opens straight after a cleared run and is the only way on (design doc 2.1) —
+            // the victory panel's 상점으로 button loads it. Defeat and the campaign clear need nothing
+            // here either: their end screens load themselves.
 
             GUILayout.Label(_attackLog.Length > 0 ? _attackLog : "No attack yet.");
             GUILayout.Label(_aiming ? $"Power: {_currentPowerFraction * 100f:F0}%" : "Power: -");
