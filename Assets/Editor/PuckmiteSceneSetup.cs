@@ -16,6 +16,7 @@ namespace Puckmite.EditorTools
     public static class PuckmiteSceneSetup
     {
         private const string TuningPath = "Assets/Settings/GameTuning.asset";
+        private const string HeroArtPath = "Assets/Art/Sprites/Characters/Hero.aseprite";
         private const string TitlePath = "Assets/Scenes/Title.unity";
         private const string BattlePath = "Assets/Scenes/Battle.unity";
         private const string ShopPath = "Assets/Scenes/Shop.unity";
@@ -109,6 +110,29 @@ namespace Puckmite.EditorTools
             SetReference(panel, "_tuning", tuning);
             SetReference(panel, "_arena", controller);
 
+            // Battle only: the hero art prefab for the player's character-row slot. Missing art is not
+            // fatal — the controller falls back to its placeholder circle — so this only warns.
+            if (controller is BattleController)
+            {
+                GameObject heroArt = AssetDatabase.LoadAssetAtPath<GameObject>(HeroArtPath);
+                if (heroArt == null)
+                {
+                    Debug.LogWarning($"[PuckHero] {HeroArtPath} not found — the player keeps the placeholder circle.");
+                }
+                else
+                {
+                    SetReference(controller, "_heroBodyPrefab", heroArt);
+                }
+
+                // Optional art slots: quiet when the file does not exist yet (the controller renders
+                // placeholders), so no warnings pile up while the art is still being drawn.
+                SetOptionalSprite(controller, "_groundSprite", "Assets/Art/Sprites/Environment/Ground");
+                SetOptionalSprite(controller, "_healthIconSprite", "Assets/Art/Sprites/UI/StatHealth");
+                SetOptionalSprite(controller, "_shieldIconSprite", "Assets/Art/Sprites/UI/StatShield");
+                SetOptionalSprite(controller, "_attackIconSprite", "Assets/Art/Sprites/UI/StatAttack");
+                SetOptionalSprite(controller, "_stoneIconSprite", "Assets/Art/Sprites/UI/StatStones");
+            }
+
             EditorSceneManager.SaveScene(scene, path);
 
             // Read back what was actually saved, so a wiring regression names itself here instead of
@@ -141,6 +165,22 @@ namespace Puckmite.EditorTools
             }
 
             EditorSceneManager.SaveScene(scene, path);
+        }
+
+        // An optional art slot: tries the promised path as .png first, then .aseprite. A missing file is
+        // normal (the art is drawn over time), so nothing is logged for it.
+        private static void SetOptionalSprite(Object target, string field, string pathWithoutExtension)
+        {
+            Sprite sprite = AssetDatabase.LoadAssetAtPath<Sprite>(pathWithoutExtension + ".png");
+            if (sprite == null)
+            {
+                sprite = AssetDatabase.LoadAssetAtPath<Sprite>(pathWithoutExtension + ".aseprite");
+            }
+
+            if (sprite != null)
+            {
+                SetReference(target, field, sprite);
+            }
         }
 
         private static void SetReference(Object target, string field, Object value)

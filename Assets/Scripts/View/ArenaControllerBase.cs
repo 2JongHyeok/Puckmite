@@ -34,9 +34,10 @@ namespace Puckmite.View
         private const float MaxAccumulated = 0.1f;   // clamp so a hitch cannot trigger a step burst
         private const int MaxStepsPerFrame = 4000;
 
-        // The camera frames content up to here (the battle's character row). The shop keeps the same
-        // framing even without a row, so the board sits identically in both scenes.
-        private const float CameraContentTop = 21.8f;
+        // The camera frames content up to here (the battle's character row: bodies on the feet line plus
+        // the stat columns over their heads). The shop keeps the same framing even without a row, so the
+        // board sits identically in both scenes.
+        private const float CameraContentTop = 25f;
 
         // Trajectory preview: safety cap on how many steps to roll the cue forward when tracing its path.
         private const int PreviewMaxSteps = 2000;

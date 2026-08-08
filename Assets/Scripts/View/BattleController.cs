@@ -15,14 +15,17 @@ namespace Puckmite.View
     /// </summary>
     public sealed class BattleController : ArenaControllerBase
     {
-        // Character row (design doc 2.2: player + enemy characters across the top, board below).
-        // The row sits high enough that the five-line stat block clears the board's top wall (12.5 + half its
-        // 0.4 thickness): block bottom = CharBodyY + CharStatOffset - CharStatHeight/2 = 13.4.
-        private const float CharBodyY = 20f;         // body centre height, above the board top (12.5)
-        private const float CharBodyRadius = 1.6f;
-        private const float CharStatOffset = -4.1f;  // name + stat block, centred below the body
-        private const float CharStatHeight = 5f;     // its box height (name + HP + ATK + SHD + STONES lines)
+        // Character row (design doc 2.2: player + enemy characters across the top, board below), laid out
+        // like the reference shot: everyone stands on one feet line floating just above the board (a ground
+        // strip can be wired under it), and each actor's stat column stacks over its head. The columns
+        // start above the tallest body (the hero art) so every column tops out level.
+        private const float CharFeetY = BoardHalf + 0.8f; // shared feet line, slightly above the board top
+        private const float CharBodyHeight = 6.4f;   // hero art height; also sizes its ring and hit disc
+        private const float CharBodyRadius = 1.6f;   // placeholder circle radius (enemies, until their art)
         private const float CharSpread = 9f;         // x of the leftmost/rightmost character
+        private const float StatRowHeight = 1.1f;    // one icon-and-number row
+        private const int StatRowCount = 4;          // top to bottom: health, shield, attack, stones
+        private const float StatBlockBottom = CharFeetY + CharBodyHeight + 0.4f;
 
         // Cell-occupancy highlights: up to 4 cells per stone (radius 1.5 on 5-wide cells). The pool is
         // sized from the roster at build — the twin kind and bought battle stones outgrew a fixed cap.
@@ -59,11 +62,29 @@ namespace Puckmite.View
         private int _hoveredEnemyActor = -1;  // enemy under the cursor, by character or by stone; -1 = none
         private readonly List<int> _settleIds = new List<int>(); // reused: current actor's stone ids to settle
 
-        // Top character row (design doc 2.2): one stat text per actor. Each actor's buff is a snapshot taken
-        // when its own turn ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
-        private TextMeshPro[] _characterStatTexts; // indexed by actor
+        // Hero art for the player's slot in the character row: the prefab Unity generates from
+        // Hero.aseprite (its Animator loops the idle clip on its own). Wired by Tools/PuckHero/Setup
+        // Game Scenes; when it is missing the slot falls back to the placeholder circle.
+        [SerializeField] private GameObject _heroBodyPrefab;
+        private bool _heroBodyUsesArt; // art keeps a white alive-tint (ActorColor would stain it)
+
+        // Optional art slots, wired by Tools/PuckHero/Setup Game Scenes from promised paths under
+        // Assets/Art/Sprites/ (Environment/Ground, UI/StatHealth·StatShield·StatAttack·StatStones; .png
+        // or .aseprite). Placeholders render until the files exist.
+        [SerializeField] private Sprite _groundSprite;
+        [SerializeField] private Sprite _healthIconSprite;
+        [SerializeField] private Sprite _shieldIconSprite;
+        [SerializeField] private Sprite _attackIconSprite;
+        [SerializeField] private Sprite _stoneIconSprite;
+
+        // Top character row (design doc 2.2). Each actor's buff is a snapshot taken when its own turn
+        // ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
+        private TextMeshPro[][] _statRowTexts;     // [actor][row]: the number next to each stat icon
+        private SpriteRenderer[][] _statRowIcons;  // [actor][row]: wired art, or a tinted placeholder square
         private SpriteRenderer[] _characterBodies;      // indexed by actor, greyed out when the character is down
         private SpriteRenderer[] _characterTargetRings; // ring behind a character that can be attacked right now
+        private float[] _characterCenterY;    // per-actor body centre — art and placeholder circles differ
+        private float[] _characterGrabRadius; // per-actor click/hover disc around that centre
         private int[] _actorBuffAttack;            // actor -> attack buff snapshot (0 = base only)
 
         // Character combat (design doc 3.6/3.8) — view-only; the sim stays pure physics and stone combat.
@@ -88,6 +109,19 @@ namespace Puckmite.View
         private int _aiPlanCandidates; // last search size, shown in the debug panel
         private readonly List<int> _planOwnIds = new List<int>();         // reused per plan
         private readonly List<Vector2> _planEntrySpots = new List<Vector2>();
+
+        // The enemy search runs off the main thread so a long think never freezes a frame (the sim is
+        // pure C#). The task works exclusively on private copies — a Clone of the board and copied
+        // lists — so nothing it reads can change under it; the result fires back on the main thread.
+        private System.Threading.Tasks.Task<EnemyPlanOutcome> _planTask;
+        private Puck _planTemplate; // the entering stone the running search was given, used when it fires
+
+        private struct EnemyPlanOutcome
+        {
+            public bool Planned;
+            public EnemyPlan Plan;
+            public float Milliseconds;
+        }
 
         private SpriteRenderer[] _cellHighlights;                    // pool of occupied-cell overlays
         private readonly List<int> _occupiedCells = new List<int>(); // reused per puck each frame
@@ -437,14 +471,23 @@ namespace Puckmite.View
                 }
             }
 
-            // An enemy turn drives itself: after a short think pause, search for the best shot and fire it.
+            // An enemy turn drives itself: after a short think pause, search for the best shot on a
+            // background task (frames — and the idle animations — keep running), then fire the result.
             if (!_gameOver && _tuning.EnemyAiEnabled && _currentActor != 0 && !_actorDead[_currentActor]
                 && !_hasRolledThisTurn && !_noStoneTurn && !_awaitingAttack && _sim.AllAtRest())
             {
-                _enemyThinkTimer -= Time.deltaTime;
-                if (_enemyThinkTimer <= 0f)
+                if (_planTask == null)
                 {
-                    ExecuteEnemyPlan();
+                    // A domain reload during the search drops the task; the already-expired timer restarts it.
+                    _enemyThinkTimer -= Time.deltaTime;
+                    if (_enemyThinkTimer <= 0f)
+                    {
+                        StartEnemyPlanSearch();
+                    }
+                }
+                else if (_planTask.IsCompleted)
+                {
+                    ApplyEnemyPlan();
                 }
             }
 
@@ -792,13 +835,14 @@ namespace Puckmite.View
             return GameHudRect.Contains(gui) || DebugPanel.Covers(gui);
         }
 
-        // The character whose body circle covers the point, or -1. Used to pick an attack target.
+        // The character whose body covers the point, or -1. Used to pick an attack target. Per-actor
+        // discs, because the hero art and the placeholder circles differ in size and centre.
         private int CharacterAt(Vector2 world)
         {
-            float grab = CharBodyRadius * 1.4f; // forgiving, the bodies are far apart
             for (int actor = 0; actor < _actorCount; actor++)
             {
-                Vector2 center = new Vector2(CharacterX(actor), CharBodyY);
+                Vector2 center = new Vector2(CharacterX(actor), _characterCenterY[actor]);
+                float grab = _characterGrabRadius[actor];
                 if ((world - center).sqrMagnitude <= grab * grab)
                 {
                     return actor;
@@ -930,12 +974,12 @@ namespace Puckmite.View
             GameFlow.LoadBattle();
         }
 
-        // Searches the current enemy's candidate shots with EnemyPlanner and fires the best one, exactly as
-        // if a hand had rolled it — the buff capture, attack and turn end all run through the normal flow.
-        private void ExecuteEnemyPlan()
+        // Gathers everything the enemy search needs — own stone ids, entry candidates, weights, config —
+        // and starts it on a background task. Everything handed to the task is a private copy (the board
+        // is a Clone, the lists are copied, the snipe priority too), so the search reads nothing this
+        // thread can mutate; TryPlan itself only ever rolls further clones.
+        private void StartEnemyPlanSearch()
         {
-            System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
             _planOwnIds.Clear();
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             for (int i = 0; i < pucks.Count; i++)
@@ -996,21 +1040,57 @@ namespace Puckmite.View
             };
 
             // 저격형 (design doc 4.3): its roll hunts the player's weakest stone — priority sorted by
-            // health, then Id (deterministic tie-break), handed to the planner's snipe tiers.
+            // health, then Id (deterministic tie-break), handed to the planner's snipe tiers. Copied,
+            // because BuildSnipePriority returns a reused buffer the task must not share.
             if (_actorTypes[_currentActor] == EnemyType.Sniper)
             {
-                config.SnipePriority = BuildSnipePriority();
+                config.SnipePriority = new List<int>(BuildSnipePriority());
             }
 
-            bool planned = EnemyPlanner.TryPlan(
-                _sim, PuckOwner.Enemy, _planOwnIds, hasNewStone, template, _planEntrySpots,
-                _tuning.MaxPower, OccupancyThreshold, weights, config, out EnemyPlan plan);
+            PuckSim board = _sim.Clone();
+            List<int> ownIds = new List<int>(_planOwnIds);
+            List<Vector2> entrySpots = new List<Vector2>(_planEntrySpots);
+            bool useNewStone = hasNewStone;
+            Puck stoneTemplate = template;
+            float maxPower = _tuning.MaxPower;
 
-            stopwatch.Stop();
-            _aiPlanMs = (float)stopwatch.Elapsed.TotalMilliseconds;
-            _aiPlanCandidates = plan.CandidatesEvaluated;
+            _planTemplate = template;
+            _planTask = System.Threading.Tasks.Task.Run(() =>
+            {
+                System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                bool planned = EnemyPlanner.TryPlan(
+                    board, PuckOwner.Enemy, ownIds, useNewStone, stoneTemplate, entrySpots,
+                    maxPower, OccupancyThreshold, weights, config, out EnemyPlan plan);
+                stopwatch.Stop();
+                return new EnemyPlanOutcome
+                {
+                    Planned = planned,
+                    Plan = plan,
+                    Milliseconds = (float)stopwatch.Elapsed.TotalMilliseconds,
+                };
+            });
+        }
 
-            if (!planned)
+        // Fires the finished search's best shot on the main thread, exactly as if a hand had rolled it —
+        // the buff capture, attack and turn end all run through the normal flow.
+        private void ApplyEnemyPlan()
+        {
+            System.Threading.Tasks.Task<EnemyPlanOutcome> task = _planTask;
+            _planTask = null;
+
+            if (task.IsFaulted)
+            {
+                Debug.LogError($"[PuckHero] Enemy AI search failed for {ActorName(_currentActor)}: {task.Exception?.GetBaseException().Message} — ending its turn.");
+                _noStoneTurn = true;
+                _noStoneTimer = 0f;
+                return;
+            }
+
+            EnemyPlanOutcome outcome = task.Result;
+            _aiPlanMs = outcome.Milliseconds;
+            _aiPlanCandidates = outcome.Plan.CandidatesEvaluated;
+
+            if (!outcome.Planned)
             {
                 // StartTurn routes turns with nothing to roll to the no-stone path, so this is unexpected.
                 Debug.LogError($"[PuckHero] Enemy AI found no shot for {ActorName(_currentActor)}; ending its turn.");
@@ -1019,10 +1099,11 @@ namespace Puckmite.View
                 return;
             }
 
+            EnemyPlan plan = outcome.Plan;
             if (plan.UseNewStone)
             {
                 _handReady[_currentActor].Remove(plan.StoneId);
-                Puck stone = template;
+                Puck stone = _planTemplate;
                 stone.Position = plan.EntryPosition;
                 stone.Velocity = plan.Velocity;
                 _sim.AddPuck(stone);
@@ -1502,9 +1583,12 @@ namespace Puckmite.View
         // the team colour with a name + stat block below it that UpdateCharacterStats refreshes.
         private void BuildCharacters()
         {
-            _characterStatTexts = new TextMeshPro[_actorCount];
+            _statRowTexts = new TextMeshPro[_actorCount][];
+            _statRowIcons = new SpriteRenderer[_actorCount][];
             _characterBodies = new SpriteRenderer[_actorCount];
             _characterTargetRings = new SpriteRenderer[_actorCount];
+            _characterCenterY = new float[_actorCount];
+            _characterGrabRadius = new float[_actorCount];
             _actorBuffAttack = new int[_actorCount];
             _actorHealth = new int[_actorCount];
             _actorBaseShield = new int[_actorCount];
@@ -1521,6 +1605,8 @@ namespace Puckmite.View
 
             ResetCombatState();
 
+            BuildGroundStrip();
+
             for (int actor = 0; actor < _actorCount; actor++)
             {
                 float x = CharacterX(actor);
@@ -1528,11 +1614,36 @@ namespace Puckmite.View
                 GameObject root = new GameObject($"Character{actor}");
                 root.transform.SetParent(transform, false);
 
+                // Body first: the hero art and the placeholder circle stand on the same feet line but
+                // differ in height, and the ring and hit disc follow whichever body was built.
+                SpriteRenderer body = actor == 0 ? TryBuildHeroBody(root.transform, x) : null;
+                if (body != null)
+                {
+                    _characterCenterY[actor] = CharFeetY + CharBodyHeight * 0.5f;
+                    _characterGrabRadius[actor] = CharBodyHeight * 0.6f;
+                }
+                else
+                {
+                    GameObject bodyGo = new GameObject("Body");
+                    bodyGo.transform.SetParent(root.transform, false);
+                    float diameter = CharBodyRadius * 2f;
+                    bodyGo.transform.localPosition = new Vector3(x, CharFeetY + CharBodyRadius, 0f);
+                    bodyGo.transform.localScale = new Vector3(diameter, diameter, 1f);
+                    body = bodyGo.AddComponent<SpriteRenderer>();
+                    body.sprite = ProceduralSprites.Circle();
+                    body.color = ActorColor(actor);
+                    body.sortingOrder = 10;
+                    _characterCenterY[actor] = CharFeetY + CharBodyRadius;
+                    _characterGrabRadius[actor] = CharBodyRadius * 1.4f; // forgiving, the bodies are far apart
+                }
+
+                _characterBodies[actor] = body;
+
                 // Target ring: same treatment the current actor's stones get, so "clickable" reads the same way.
                 GameObject ringGo = new GameObject("TargetRing");
                 ringGo.transform.SetParent(root.transform, false);
-                float ringDiameter = CharBodyRadius * 2.5f;
-                ringGo.transform.localPosition = new Vector3(x, CharBodyY, 0f);
+                float ringDiameter = _characterGrabRadius[actor] * 2.1f;
+                ringGo.transform.localPosition = new Vector3(x, _characterCenterY[actor], 0f);
                 ringGo.transform.localScale = new Vector3(ringDiameter, ringDiameter, 1f);
                 SpriteRenderer ring = ringGo.AddComponent<SpriteRenderer>();
                 ring.sprite = ProceduralSprites.Circle();
@@ -1541,30 +1652,123 @@ namespace Puckmite.View
                 ring.enabled = false;
                 _characterTargetRings[actor] = ring;
 
-                GameObject bodyGo = new GameObject("Body");
-                bodyGo.transform.SetParent(root.transform, false);
-                float diameter = CharBodyRadius * 2f;
-                bodyGo.transform.localPosition = new Vector3(x, CharBodyY, 0f);
-                bodyGo.transform.localScale = new Vector3(diameter, diameter, 1f);
-                SpriteRenderer body = bodyGo.AddComponent<SpriteRenderer>();
-                body.sprite = ProceduralSprites.Circle();
-                body.color = ActorColor(actor);
-                body.sortingOrder = 10;
-                _characterBodies[actor] = body;
+                BuildStatRows(root.transform, actor, x);
+            }
+        }
 
-                _characterStatTexts[actor] = MakeCharacterText(root.transform, "Stats", x, CharBodyY + CharStatOffset, CharBodyRadius * 3.6f, CharStatHeight);
+        // The player's slot shows the hero art when it is wired: the imported prefab is scaled to
+        // CharBodyHeight and stood on the feet line — the import pivot sits below the feet, so the pivot
+        // cannot be trusted for placement and the sprite bounds are aligned instead. Returns null when
+        // the art is missing or broken, and the caller falls back to the circle.
+        private SpriteRenderer TryBuildHeroBody(Transform parent, float x)
+        {
+            if (_heroBodyPrefab == null)
+            {
+                return null;
+            }
+
+            GameObject go = Instantiate(_heroBodyPrefab, parent, false);
+            go.name = "Body";
+
+            SpriteRenderer sr = go.GetComponentInChildren<SpriteRenderer>();
+            if (sr == null || sr.sprite == null)
+            {
+                Debug.LogError("[PuckHero] Hero prefab has no usable SpriteRenderer — using the placeholder circle.");
+                Destroy(go);
+                return null;
+            }
+
+            sr.sortingOrder = 10;
+            sr.color = Color.white;
+
+            if (go.TryGetComponent(out Animator animator))
+            {
+                animator.speed = 0.5f; // idle plays at half speed (user-tuned feel)
+            }
+
+            go.transform.localPosition = new Vector3(x, CharFeetY, 0f);
+            go.transform.localScale *= CharBodyHeight / sr.bounds.size.y;
+            // Scaling grew the art around its pivot; align the sprite centre so the feet land on the line.
+            Vector3 target = parent.TransformPoint(new Vector3(x, CharFeetY + CharBodyHeight * 0.5f, 0f));
+            go.transform.position += target - sr.bounds.center;
+
+            _heroBodyUsesArt = true;
+            return sr;
+        }
+
+        // Row tints for the placeholder icon squares, in row order, so the columns read before the real
+        // icons exist: health red, shield blue, attack orange, stones grey.
+        private static readonly Color[] StatPlaceholderTints =
+        {
+            new Color(0.90f, 0.30f, 0.30f),
+            new Color(0.35f, 0.55f, 0.90f),
+            new Color(0.95f, 0.60f, 0.20f),
+            new Color(0.75f, 0.75f, 0.75f),
+        };
+
+        // The ground strip the characters stand on (reference look, art only — no gameplay). Tiled across
+        // the board's full width so the image repeats instead of stretching; nothing is drawn until the
+        // sprite is wired.
+        private void BuildGroundStrip()
+        {
+            if (_groundSprite == null)
+            {
+                return;
+            }
+
+            GameObject go = new GameObject("CharacterGround");
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = new Vector3(0f, (BoardHalf + CharFeetY) * 0.5f, 0f);
+
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = _groundSprite;
+            sr.drawMode = SpriteDrawMode.Tiled;
+            sr.size = new Vector2(BoardHalf * 2f + 0.8f, CharFeetY - BoardHalf);
+            sr.sortingOrder = 5; // above the board walls (3), behind the rings and bodies (9, 10)
+        }
+
+        // One actor's stat column over its head: StatRowCount rows of [icon] [number]. Wired icon sprites
+        // are fitted to the row height; a missing icon renders as a tinted square so the slot is visible.
+        private void BuildStatRows(Transform root, int actor, float x)
+        {
+            Sprite[] icons = { _healthIconSprite, _shieldIconSprite, _attackIconSprite, _stoneIconSprite };
+            _statRowTexts[actor] = new TextMeshPro[StatRowCount];
+            _statRowIcons[actor] = new SpriteRenderer[StatRowCount];
+            for (int row = 0; row < StatRowCount; row++)
+            {
+                float y = StatBlockBottom + (StatRowCount - row - 0.5f) * StatRowHeight;
+
+                GameObject iconGo = new GameObject($"StatIcon{row}");
+                iconGo.transform.SetParent(root, false);
+                iconGo.transform.localPosition = new Vector3(x - 1.4f, y, 0f);
+                SpriteRenderer icon = iconGo.AddComponent<SpriteRenderer>();
+                icon.sortingOrder = 12;
+                if (icons[row] != null)
+                {
+                    icon.sprite = icons[row];
+                    iconGo.transform.localScale = Vector3.one * (0.9f / icon.bounds.size.y);
+                }
+                else
+                {
+                    icon.sprite = ProceduralSprites.Unit();
+                    icon.color = StatPlaceholderTints[row];
+                    iconGo.transform.localScale = new Vector3(0.8f, 0.8f, 1f);
+                }
+
+                _statRowIcons[actor][row] = icon;
+                _statRowTexts[actor][row] = MakeStatText(root, $"StatValue{row}", x + 0.85f, y, 3.6f, StatRowHeight);
             }
         }
 
         // A world-space TMP that auto-sizes into the given box (placeholder to restyle later, like the level text).
-        private static TextMeshPro MakeCharacterText(Transform parent, string name, float x, float y, float width, float height)
+        private static TextMeshPro MakeStatText(Transform parent, string name, float x, float y, float width, float height)
         {
             GameObject go = new GameObject(name);
             go.transform.SetParent(parent, false);
             go.transform.localPosition = new Vector3(x, y, 0f);
 
             TextMeshPro tmp = go.AddComponent<TextMeshPro>();
-            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.alignment = TextAlignmentOptions.MidlineLeft;
             tmp.enableAutoSizing = true;
             tmp.fontSizeMin = 1f;
             tmp.fontSizeMax = 8f;
@@ -1784,12 +1988,14 @@ namespace Puckmite.View
             return -1;
         }
 
-        // Writes each actor's character row: bold name, current/max health, and attack/shield including the
-        // buff snapshot locked in at that actor's last turn end (design doc 3.6 — held until its next turn).
-        // The body is tinted grey when the character is down, and brightened while it is a legal target.
+        // Writes each actor's stat column (rows over the head — health, shield, attack, stones). Attack
+        // and shield show the buffed total as one number (the buff snapshot from that actor's last turn
+        // end, design doc 3.6); a corrupted-cell debuff simply reads as a lower — possibly negative —
+        // total. Health stays current/max, and stones keep the waiting count in parentheses (those are
+        // not a buff: they are stones that exist but cannot be thrown yet).
         private void UpdateCharacterStats()
         {
-            if (_characterStatTexts == null)
+            if (_statRowTexts == null)
             {
                 return;
             }
@@ -1798,23 +2004,22 @@ namespace Puckmite.View
             {
                 if (_actorDead[actor])
                 {
-                    _characterStatTexts[actor].text = $"<b>{ActorName(actor)}</b>\nDOWN";
                     _characterBodies[actor].color = new Color(0.30f, 0.30f, 0.34f, 0.55f);
                     _characterTargetRings[actor].enabled = false;
-                    continue;
+                }
+                else
+                {
+                    _characterBodies[actor].color = actor == 0 && _heroBodyUsesArt ? Color.white : ActorColor(actor);
+                    UpdateCharacterRing(actor);
                 }
 
-                string attack = FormatStat(BaseAttack(actor), _actorBuffAttack[actor]);
-                string shield = FormatStat(_actorBaseShield[actor], _actorEffectShield[actor]);
-                // Playable count first; stones still waiting out a turn go in parentheses. Not FormatStat —
-                // that sums its two arguments, which would count the unplayable ones as available.
                 int pending = _handPending[actor].Count;
-                string stones = pending > 0 ? $"{_handReady[actor].Count} (+{pending})" : _handReady[actor].Count.ToString();
-                _characterStatTexts[actor].text =
-                    $"<b>{ActorName(actor)}</b>\nHP {_actorHealth[actor]}/{BaseHealth(actor)}\nATK {attack}\nSHD {shield}\nSTONES {stones}";
-
-                _characterBodies[actor].color = ActorColor(actor);
-                UpdateCharacterRing(actor);
+                _statRowTexts[actor][0].text = $"{_actorHealth[actor]}/{BaseHealth(actor)}";
+                _statRowTexts[actor][1].text = $"x {_actorBaseShield[actor] + _actorEffectShield[actor]}";
+                _statRowTexts[actor][2].text = $"x {BaseAttack(actor) + _actorBuffAttack[actor]}";
+                _statRowTexts[actor][3].text = pending > 0
+                    ? $"x {_handReady[actor].Count} (+{pending})"
+                    : $"x {_handReady[actor].Count}";
             }
         }
 
@@ -1842,19 +2047,6 @@ namespace Puckmite.View
             }
 
             ring.enabled = false;
-        }
-
-        // Base value, plus the bonus in parentheses when buffed, so the turn-end gain is visible (e.g.
-        // "6 (+4)"). A corrupted-cell debuff shows the same way with its sign (e.g. "-2 (-4)") — the total
-        // is what the attack actually deals, so a click that would HEAL the target is readable beforehand.
-        private static string FormatStat(int baseValue, int buff)
-        {
-            if (buff == 0)
-            {
-                return baseValue.ToString();
-            }
-
-            return buff > 0 ? $"{baseValue + buff} (+{buff})" : $"{baseValue + buff} ({buff})";
         }
 
         // --- Game HUD -----------------------------------------------------------------------------
