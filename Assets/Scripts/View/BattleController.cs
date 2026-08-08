@@ -21,7 +21,10 @@ namespace Puckmite.View
         // start above the tallest body (the hero art) so every column tops out level.
         private const float CharFeetY = BoardHalf + 0.8f; // shared feet line, slightly above the board top
         private const float CharBodyHeight = 6.4f;   // hero art height; also sizes its ring and hit disc
-        private const float CharBodyRadius = 1.6f;   // placeholder circle radius (enemies, until their art)
+        private const float CharBodyRadius = 1.6f;   // placeholder circle radius (art-less kinds only)
+        private const float CharArtScale = 7.9f;     // world scale of character art: the hero's 81px ≈ CharBodyHeight,
+                                                     // and the enemies share the pixel grid (design doc 4.4)
+        private const float EnemyMinBodyHeight = 3.5f; // short creatures (the slime) still read at least this tall (사용자 지정)
         private const float CharSpread = 9f;         // x of the leftmost/rightmost character
         private const float StatRowHeight = 1.1f;    // one icon-and-number row
         private const int StatRowCount = 4;          // top to bottom: health, shield, attack, stones
@@ -62,7 +65,17 @@ namespace Puckmite.View
         // Hero.aseprite (its Animator loops the idle clip on its own). Wired by Tools/PuckHero/Setup
         // Game Scenes; when it is missing the slot falls back to the placeholder circle.
         [SerializeField] private GameObject _heroBodyPrefab;
-        private bool _heroBodyUsesArt; // art keeps a white alive-tint (ActorColor would stain it)
+        private bool[] _bodyUsesArt; // per actor: art keeps a white alive-tint (ActorColor would stain it)
+
+        // Enemy art by kind (design doc 4.4 mapping), wired by Setup Game Scenes from Art/Sprites/Enemy/.
+        // Sniper has no art — it is out of the spawn pool (design doc 4.3).
+        [SerializeField] private GameObject _basicEnemyPrefab; // slime
+        [SerializeField] private GameObject _strikerPrefab;    // thief
+        [SerializeField] private GameObject _tankPrefab;       // pig
+        [SerializeField] private GameObject _twinPrefab;       // thief2
+        [SerializeField] private GameObject _hardStonePrefab;  // oak
+        [SerializeField] private GameObject _bomberPrefab;     // oak2
+        [SerializeField] private GameObject _anchorPrefab;     // pig2
 
         // Optional art slots, wired by Tools/PuckHero/Setup Game Scenes from promised paths under
         // Assets/Art/Sprites/ (Environment/Ground, UI/StatHealth·StatShield·StatAttack·StatStones; .png
@@ -352,16 +365,13 @@ namespace Puckmite.View
                 return EnemyType.Basic;
             }
 
-            // 자폭형 is never fielded alone (사용자 지정): a single-enemy run draws uniformly from the
-            // other seven kinds — a roll landing on Bomber's slot takes the one value the shortened
-            // range cannot reach, keeping every kind at 1/7.
-            if (enemiesThisRun == 1)
-            {
-                int roll = Random.Range(0, 7);
-                return roll == (int)EnemyType.Bomber ? EnemyType.Anchor : (EnemyType)roll;
-            }
-
-            return (EnemyType)Random.Range(0, 8); // uniform over Basic + the seven kinds
+            // 저격형 is out of the spawn pool (design doc 4.3, 사용자 결정 2026-08-08): a roll landing
+            // on its slot takes Anchor — the one value the shortened range cannot reach — keeping the
+            // draw uniform. 자폭형 is additionally never fielded alone (사용자 지정), so a single-enemy
+            // run also shortens the range past Bomber's slot.
+            int kinds = enemiesThisRun == 1 ? 6 : 7;
+            int roll = Random.Range(0, kinds);
+            return roll == (int)EnemyType.Sniper ? EnemyType.Anchor : (EnemyType)roll;
         }
 
         // Player + this run's enemies — declared, not derived from stones, so the stoneless boss still
@@ -1612,6 +1622,7 @@ namespace Puckmite.View
             _characterOutlines = new SpriteRenderer[_actorCount][];
             _characterCenterY = new float[_actorCount];
             _characterGrabRadius = new float[_actorCount];
+            _bodyUsesArt = new bool[_actorCount];
             _actorBuffAttack = new int[_actorCount];
             _actorHealth = new int[_actorCount];
             _actorBaseShield = new int[_actorCount];
@@ -1637,13 +1648,17 @@ namespace Puckmite.View
                 GameObject root = new GameObject($"Character{actor}");
                 root.transform.SetParent(transform, false);
 
-                // Body first: the hero art and the placeholder circle stand on the same feet line but
+                // Body first: art bodies and the placeholder circle stand on the same feet line but
                 // differ in height, and the ring and hit disc follow whichever body was built.
-                SpriteRenderer body = actor == 0 ? TryBuildHeroBody(root.transform, x) : null;
+                SpriteRenderer body = actor == 0
+                    ? TryBuildHeroBody(root.transform, x)
+                    : TryBuildEnemyBody(root.transform, x, _actorTypes[actor]);
                 if (body != null)
                 {
-                    _characterCenterY[actor] = CharFeetY + CharBodyHeight * 0.5f;
-                    _characterGrabRadius[actor] = CharBodyHeight * 0.6f;
+                    _bodyUsesArt[actor] = true;
+                    float height = body.bounds.size.y;
+                    _characterCenterY[actor] = CharFeetY + height * 0.5f;
+                    _characterGrabRadius[actor] = height * 0.6f;
                 }
                 else
                 {
@@ -1706,8 +1721,68 @@ namespace Puckmite.View
             Vector3 target = parent.TransformPoint(new Vector3(x, CharFeetY + CharBodyHeight * 0.5f, 0f));
             go.transform.position += target - sr.bounds.center;
 
-            _heroBodyUsesArt = true;
             return sr;
+        }
+
+        // An enemy's art body (design doc 4.4): the hero's pixel scale, so the creatures keep their drawn
+        // proportions, with a floor so the short ones (the slime) still read. Returns null when the kind
+        // has no art wired, and the caller falls back to the circle.
+        private SpriteRenderer TryBuildEnemyBody(Transform parent, float x, EnemyType type)
+        {
+            GameObject prefab = EnemyPrefabFor(type);
+            if (prefab == null)
+            {
+                return null;
+            }
+
+            GameObject go = Instantiate(prefab, parent, false);
+            go.name = "Body";
+
+            SpriteRenderer sr = go.GetComponentInChildren<SpriteRenderer>();
+            if (sr == null || sr.sprite == null)
+            {
+                Debug.LogError($"[PuckHero] Enemy prefab for {type} has no usable SpriteRenderer — using the placeholder circle.");
+                Destroy(go);
+                return null;
+            }
+
+            sr.sortingOrder = 10;
+            sr.color = Color.white;
+
+            if (go.TryGetComponent(out Animator animator))
+            {
+                animator.speed = 0.5f; // idle pace matches the hero's
+            }
+
+            go.transform.localPosition = new Vector3(x, CharFeetY, 0f);
+            go.transform.localScale *= CharArtScale;
+            float height = sr.bounds.size.y;
+            if (height < EnemyMinBodyHeight)
+            {
+                go.transform.localScale *= EnemyMinBodyHeight / height;
+                height = EnemyMinBodyHeight;
+            }
+
+            // Align by bounds — the import pivots sit below the feet (same treatment as the hero).
+            Vector3 target = parent.TransformPoint(new Vector3(x, CharFeetY + height * 0.5f, 0f));
+            go.transform.position += target - sr.bounds.center;
+
+            return sr;
+        }
+
+        private GameObject EnemyPrefabFor(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.Basic: return _basicEnemyPrefab;
+                case EnemyType.Striker: return _strikerPrefab;
+                case EnemyType.Tank: return _tankPrefab;
+                case EnemyType.Twin: return _twinPrefab;
+                case EnemyType.HardStone: return _hardStonePrefab;
+                case EnemyType.Bomber: return _bomberPrefab;
+                case EnemyType.Anchor: return _anchorPrefab;
+                default: return null; // Sniper: out of the spawn pool, no art (design doc 4.3)
+            }
         }
 
         // Row tints for the placeholder icon squares, in row order, so the columns read before the real
@@ -2025,7 +2100,7 @@ namespace Puckmite.View
                 }
                 else
                 {
-                    _characterBodies[actor].color = actor == 0 && _heroBodyUsesArt ? Color.white : ActorColor(actor);
+                    _characterBodies[actor].color = _bodyUsesArt[actor] ? Color.white : ActorColor(actor);
                     UpdateCharacterOutline(actor);
                 }
 

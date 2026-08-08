@@ -131,6 +131,15 @@ namespace Puckmite.EditorTools
                     SetReference(controller, "_heroBodyPrefab", heroArt);
                 }
 
+                // Enemy art by kind — the file→kind mapping is design doc 4.4 (2026-08-08 확정).
+                WireEnemyPrefab(controller, "_basicEnemyPrefab", "slime");
+                WireEnemyPrefab(controller, "_strikerPrefab", "thief");
+                WireEnemyPrefab(controller, "_tankPrefab", "pig");
+                WireEnemyPrefab(controller, "_twinPrefab", "thief2");
+                WireEnemyPrefab(controller, "_hardStonePrefab", "oak");
+                WireEnemyPrefab(controller, "_bomberPrefab", "oak2");
+                WireEnemyPrefab(controller, "_anchorPrefab", "pig2");
+
                 // The character-outline silhouette material, created next to its shader on first run.
                 // A real asset (not a runtime Material) so the scene reference keeps the shader in builds.
                 Material silhouette = EnsureSilhouetteMaterial();
@@ -180,6 +189,21 @@ namespace Puckmite.EditorTools
             }
 
             EditorSceneManager.SaveScene(scene, path);
+        }
+
+        // One enemy kind's art prefab. The art exists for every kind in the spawn pool, so a missing
+        // file is worth a warning — that kind would silently fall back to the placeholder circle.
+        private static void WireEnemyPrefab(Object controller, string field, string fileName)
+        {
+            string path = $"Assets/Art/Sprites/Enemy/{fileName}.aseprite";
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (prefab == null)
+            {
+                Debug.LogWarning($"[PuckHero] {path} not found — that enemy kind keeps the placeholder circle.");
+                return;
+            }
+
+            SetReference(controller, field, prefab);
         }
 
         // Finds or creates the flat-colour silhouette material the character outline draws with. Created

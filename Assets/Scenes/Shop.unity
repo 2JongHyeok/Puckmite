@@ -256,6 +256,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Puckmite.View.ShopController
   _tuning: {fileID: 11400000, guid: dba168e68fa84464d81f3c3288574921, type: 2}
+  _previewDashSprite: {fileID: 0}
+  _previewHitGhostSprite: {fileID: 0}
 --- !u!4 &1264881507
 Transform:
   m_ObjectHideFlags: 0
