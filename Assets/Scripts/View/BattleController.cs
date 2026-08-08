@@ -2030,7 +2030,9 @@ namespace Puckmite.View
             new Vector2(0.7071f, 0.7071f), new Vector2(-0.7071f, 0.7071f),
             new Vector2(0.7071f, -0.7071f), new Vector2(-0.7071f, -0.7071f),
         };
-        private const float OutlineThickness = 0.12f; // world units the silhouettes are pushed out
+        private const float OutlineThickness = 0.12f;      // world units the silhouettes are pushed out
+        private const float HoverOutlineThickness = 0.2f;  // the hover link needs more presence: the red
+                                                           // hairline vanished against the enemy circles
         private static readonly Color OutlineFaint = new Color(1f, 0.9f, 0.25f, 0.07f);
 
         // Eight silhouette ghosts parented under the body, so they inherit its transform (the hero art
@@ -2063,10 +2065,12 @@ namespace Puckmite.View
         }
 
         // Shows or hides one actor's outline, keeping the ghost sprites in step with the animating body.
-        private void SetOutline(int actor, Color color, bool on)
+        // Thickness is per-state, so the offsets are recomputed against the body's scale on show.
+        private void SetOutline(int actor, Color color, bool on, float thickness = OutlineThickness)
         {
             SpriteRenderer[] ghosts = _characterOutlines[actor];
             SpriteRenderer body = _characterBodies[actor];
+            float parentScale = body.transform.lossyScale.x;
             for (int i = 0; i < ghosts.Length; i++)
             {
                 ghosts[i].enabled = on;
@@ -2074,6 +2078,7 @@ namespace Puckmite.View
                 {
                     ghosts[i].sprite = body.sprite;
                     ghosts[i].color = color;
+                    ghosts[i].transform.localPosition = OutlineDirections[i] * (thickness / parentScale);
                 }
             }
         }
@@ -2086,14 +2091,16 @@ namespace Puckmite.View
         {
             if (_awaitingAttack)
             {
-                bool strong = actor == _currentActor || actor == _hoveredCharacter;
+                // Hovering an enemy's stone promotes its owner too (design doc 4.1), so the stone→owner
+                // link stays readable while picking the target.
+                bool strong = actor == _currentActor || actor == _hoveredCharacter || actor == _hoveredEnemyActor;
                 SetOutline(actor, strong ? RingStrong : OutlineFaint, true);
                 return;
             }
 
             if (actor == _hoveredEnemyActor)
             {
-                SetOutline(actor, RingHover, true);
+                SetOutline(actor, RingHover, true, HoverOutlineThickness);
                 return;
             }
 
