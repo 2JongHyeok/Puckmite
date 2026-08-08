@@ -44,11 +44,6 @@ namespace Puckmite.View
         private bool _choiceMade;
         private float _dropT;
 
-        // The bundled TMP font has no Korean glyphs and this panel is the game's first Korean TMP text,
-        // so it builds one dynamic font asset from the OS font (Malgun Gothic ships with every Windows).
-        // Swap for a bundled font asset when the real design picks one.
-        private static TMP_FontAsset _koreanFont;
-
         public bool IsShown => _shown;
 
         public VictoryPanel(Transform parent, Sprite panelArt, Sprite buttonArt, Sprite goldArt, int healAmount)
@@ -226,18 +221,9 @@ namespace Puckmite.View
             go.transform.localPosition = pos;
 
             TextMeshPro tmp = go.AddComponent<TextMeshPro>();
-            if (_koreanFont == null)
+            if (KoreanFont.Asset() != null)
             {
-                _koreanFont = TMP_FontAsset.CreateFontAsset("Malgun Gothic", "Regular");
-                if (_koreanFont == null)
-                {
-                    Debug.LogError("[PuckHero] Could not build a Korean font from 'Malgun Gothic' — panel text will show boxes.");
-                }
-            }
-
-            if (_koreanFont != null)
-            {
-                tmp.font = _koreanFont;
+                tmp.font = KoreanFont.Asset();
             }
 
             tmp.text = text;

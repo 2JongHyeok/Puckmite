@@ -36,10 +36,6 @@ namespace Puckmite.View
         private static readonly Color RingHover = new Color(1f, 0.25f, 0.20f, 0.9f);
         private const float HoverRingScale = 1.55f;
 
-        // The rect the game HUD actually draws. Only this (and the open debug panel) may block board
-        // clicks — anything more would leave invisible dead strips (the shop learned this the hard way).
-        private static Rect GameHudRect => new Rect(10f, 10f, 320f, 200f);
-
         // Difficulty presets, indexed by the tuning's AiDifficulty (0 아주쉬움 .. 4 매우어려움). Aim density
         // rises with difficulty; the pick drops from mid-ranking shots to the best; only the top tier gets
         // the exact cascade prediction — everything below sees what the player's preview sees (design doc 8.4).
@@ -90,6 +86,9 @@ namespace Puckmite.View
         private VictoryPanel _victoryPanel;
         private int _goldEarnedThisRun; // kill gold this run, for the victory panel's line and its double pick
 
+        private TextMeshPro _turnText; // the left info column's turn line ("플레이어 턴" / "적 턴 진행중…")
+        private float _turnDotTimer;
+
         // Top character row (design doc 2.2). Each actor's buff is a snapshot taken when its own turn
         // ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
         private TextMeshPro[][] _statRowTexts;     // [actor][row]: the number next to each stat icon
@@ -107,9 +106,7 @@ namespace Puckmite.View
         private bool[] _actorDead;
         private bool _awaitingAttack;     // the player's turn is at step 4: pick a target (design doc 3.5)
         private int _hoveredCharacter = -1; // actor under the cursor while picking a target, -1 for none
-        private string _attackLog = "";   // last attack resolved, shown in the HUD
         private bool _gameOver;
-        private string _gameOverText = "";
         private readonly List<int> _removeIds = new List<int>(); // reused: stones of an actor that just died
 
         // A turn with nothing to roll: show that, then attack with base damage and end it (design doc 3.5).
@@ -265,6 +262,7 @@ namespace Puckmite.View
             BuildHoverRings();
             BuildCharacters();
             BuildVictoryPanel();
+            BuildInfoBoxes();
             BuildGhost();
             BuildPreviewLine();
             BuildPreviewMarker();
@@ -521,6 +519,7 @@ namespace Puckmite.View
             UpdateGhost();
             UpdateHoverHighlight(); // before the character row, which reads the hovered enemy
             UpdateCharacterStats();
+            UpdateTurnLine();
 
             // The victory panel runs its own pointer work: board input is already dead (_gameOver).
             if (_victoryPanel != null && _victoryPanel.IsShown && Mouse.current != null)
@@ -573,7 +572,6 @@ namespace Puckmite.View
                     {
                         _noStoneTurn = true;
                         _noStoneTimer = _tuning.NoStoneTurnDelay;
-                        _attackLog = $"{ActorName(_currentActor)} holds its bomb — attacking.";
                         return;
                     }
 
@@ -591,7 +589,6 @@ namespace Puckmite.View
                     // that is visible, then attack with base damage and end the turn (design doc 3.5).
                     _noStoneTurn = true;
                     _noStoneTimer = _tuning.NoStoneTurnDelay;
-                    _attackLog = $"{ActorName(_currentActor)} has no stones — attacking with base damage.";
                     return;
                 }
 
@@ -853,7 +850,7 @@ namespace Puckmite.View
         {
             // Mouse.position is y-up from the bottom; GUI rects are y-down from the top.
             Vector2 gui = new Vector2(screen.x, Screen.height - screen.y);
-            return GameHudRect.Contains(gui) || DebugPanel.Covers(gui);
+            return DebugPanel.Covers(gui);
         }
 
         // The character whose body covers the point, or -1. Used to pick an attack target. Per-actor
@@ -917,7 +914,6 @@ namespace Puckmite.View
                 }
             }
 
-            _attackLog = $"Boss corrupts {_debuffCells.Count} buff cell(s).";
         }
 
         // One random cell becomes a hole until the boss's next turn. The hole lives in the SIM (so the
@@ -943,7 +939,6 @@ namespace Puckmite.View
                 ReturnStoneToHand(_removeIds[i]); // swallowed stones come back as fresh ones (design doc 3.3)
             }
 
-            _attackLog = "Boss opens a hole in the board.";
         }
 
         // Every stone on the board loses 1 health; any at 0 is destroyed and returns to its owner's hand.
@@ -974,7 +969,6 @@ namespace Puckmite.View
                 }
             }
 
-            _attackLog = "Boss racks the board — every stone loses 1 health.";
         }
 
         // --- Enemy AI (continued) --------------------------------------------------------------------
@@ -1201,8 +1195,6 @@ namespace Puckmite.View
             _awaitingAttack = false;
             _gameOver = false;
             _campaignCleared = false;
-            _gameOverText = "";
-            _attackLog = "";
             _noStoneTurn = false;
             ClearGhost();
         }
@@ -1237,7 +1229,6 @@ namespace Puckmite.View
             {
                 int healed = Mathf.Min(-damage, BaseHealth(target) - _actorHealth[target]);
                 _actorHealth[target] += healed;
-                _attackLog = $"{ActorName(attacker)}'s corrupted attack heals {ActorName(target)} for {healed}.";
                 return;
             }
 
@@ -1251,18 +1242,10 @@ namespace Puckmite.View
             remaining -= fromBase;
             _actorHealth[target] -= remaining;
 
-            int absorbed = fromEffect + fromBase;
-            string absorbedText = absorbed > 0 ? $" (shield absorbed {absorbed})" : "";
-
             if (_actorHealth[target] <= 0)
             {
                 _actorHealth[target] = 0;
                 KillActor(target);
-                _attackLog = $"{ActorName(attacker)} hit {ActorName(target)} for {damage}{absorbedText} — down.";
-            }
-            else
-            {
-                _attackLog = $"{ActorName(attacker)} hit {ActorName(target)} for {damage}{absorbedText} — HP {_actorHealth[target]}.";
             }
 
             CheckGameOver();
@@ -1313,7 +1296,6 @@ namespace Puckmite.View
             if (_actorDead[0])
             {
                 _gameOver = true;
-                _gameOverText = $"Defeat on stage {Campaign.Stage}-{Campaign.Run}.";
                 _endScreenTimer = EndScreenDelay; // the game-over screen takes it from here (사용자 지정)
                 return;
             }
@@ -1347,14 +1329,9 @@ namespace Puckmite.View
             if (lastRun && Campaign.Stage >= CampaignState.StageCount)
             {
                 _campaignCleared = true;
-                _gameOverText = "All stages cleared.";
                 _endScreenTimer = EndScreenDelay; // the game-clear screen takes it from here (사용자 지정)
                 return;
             }
-
-            _gameOverText = lastRun
-                ? $"Stage {Campaign.Stage} cleared. Healed to {Campaign.NextRunHealth}."
-                : $"Run {Campaign.Stage}-{Campaign.Run} cleared. Healed to {Campaign.NextRunHealth}.";
 
             _victoryPanel.Show(_goldEarnedThisRun); // its 상점으로 button is the way on (design doc 2.1)
         }
@@ -1387,11 +1364,6 @@ namespace Puckmite.View
         {
             Campaign.Gold += _goldEarnedThisRun;
             _victoryPanel.SetGoldAmount(_goldEarnedThisRun * 2);
-        }
-
-        private string RunLabel()
-        {
-            return Campaign.IsBossRun ? $"Stage {Campaign.Stage}-{Campaign.Run} (Boss)" : $"Stage {Campaign.Stage}-{Campaign.Run}";
         }
 
         // The player's base stats carry the upgrades bought on the shop board; they accumulate for the whole
@@ -1493,7 +1465,6 @@ namespace Puckmite.View
             if (healthLoss > 0)
             {
                 _actorHealth[actor] -= healthLoss;
-                _attackLog = $"{ActorName(actor)} loses {healthLoss} health to corrupted cells.";
                 if (_actorHealth[actor] <= 0)
                 {
                     _actorHealth[actor] = 0;
@@ -2154,57 +2125,78 @@ namespace Puckmite.View
             SetOutline(actor, default, false);
         }
 
-        // --- Game HUD -----------------------------------------------------------------------------
+        // --- Left info column (user mock 2026-08-09, replacing the old IMGUI corner panel) ----------
 
-        private void OnGUI()
+        private void BuildInfoBoxes()
         {
-            if (_sim == null)
+            string stage = Campaign.IsBossRun
+                ? $"스테이지 {Campaign.Stage}-보스"
+                : $"스테이지 {Campaign.Stage}-{Campaign.Run}";
+            MakeInfoBox("StageBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = stage;
+            _turnText = MakeInfoBox("TurnBox", new Vector2(-19f, 1.5f), new Vector2(9f, 6f));
+        }
+
+        private TextMeshPro MakeInfoBox(string name, Vector2 center, Vector2 size)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = center;
+
+            GameObject bgGo = new GameObject("Bg");
+            bgGo.transform.SetParent(go.transform, false);
+            bgGo.transform.localScale = new Vector3(size.x, size.y, 1f);
+            SpriteRenderer bg = bgGo.AddComponent<SpriteRenderer>();
+            bg.sprite = ProceduralSprites.Unit();
+            bg.color = new Color(0.14f, 0.17f, 0.24f, 0.9f);
+            bg.sortingOrder = 15;
+
+            GameObject textGo = new GameObject("Text");
+            textGo.transform.SetParent(go.transform, false);
+            TextMeshPro tmp = textGo.AddComponent<TextMeshPro>();
+            if (KoreanFont.Asset() != null)
+            {
+                tmp.font = KoreanFont.Asset();
+            }
+
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 1f;
+            tmp.fontSizeMax = 8f;
+            tmp.rectTransform.sizeDelta = new Vector2(size.x - 0.8f, size.y - 0.6f);
+            tmp.color = Color.white;
+            tmp.GetComponent<MeshRenderer>().sortingOrder = 16;
+            return tmp;
+        }
+
+        // "적 턴 진행중." with the dot count cycling 1→2→3 marks the enemy acting (사용자 지정, 0.4s a
+        // step); the player's own turn is a plain label, and the end states clear the line.
+        private void UpdateTurnLine()
+        {
+            if (_turnText == null)
             {
                 return;
             }
 
-            GUILayout.BeginArea(GameHudRect, GUI.skin.box);
-
-            GUILayout.Label($"PuckHero — {RunLabel()}");
-            GUILayout.Label(_gameOver ? $"** {_gameOverText} **" : $"Turn: {ActorName(_currentActor)}    {TurnPrompt()}");
-
-            // The shop opens straight after a cleared run and is the only way on (design doc 2.1) —
-            // the victory panel's 상점으로 button loads it. Defeat and the campaign clear need nothing
-            // here either: their end screens load themselves.
-
-            GUILayout.Label(_attackLog.Length > 0 ? _attackLog : "No attack yet.");
-            GUILayout.Label(_aiming ? $"Power: {_currentPowerFraction * 100f:F0}%" : "Power: -");
-            GUILayout.Label("F1: debug panel");
-
-            GUILayout.EndArea();
-        }
-
-        // What the current actor is waiting on, for the HUD turn line.
-        private string TurnPrompt()
-        {
-            if (_noStoneTurn)
+            string line;
+            if (_gameOver)
             {
-                return _currentActor != 0 && IsStage1Boss ? "(boss is warping the board…)" : "(no stones to roll)";
+                line = "";
+            }
+            else if (_currentActor == 0)
+            {
+                line = "플레이어 턴";
+            }
+            else
+            {
+                _turnDotTimer += Time.deltaTime;
+                int dots = 1 + (int)(_turnDotTimer / 0.4f) % 3;
+                line = dots == 1 ? "적 턴 진행중." : dots == 2 ? "적 턴 진행중.." : "적 턴 진행중...";
             }
 
-            if (_tuning.EnemyAiEnabled && _currentActor != 0)
+            if (_turnText.text != line)
             {
-                return _hasRolledThisTurn ? "(rolling…)" : "(enemy thinking…)";
+                _turnText.text = line;
             }
-
-            if (_awaitingAttack)
-            {
-                return "(click an enemy to attack)";
-            }
-
-            if (_hasRolledThisTurn)
-            {
-                return "(rolling…)";
-            }
-
-            string roll = _ghostActive ? "roll a stone, or the new one on your edge" : "roll a highlighted stone";
-            // The roll-skip is player-only, so only the player's prompt advertises it.
-            return _currentActor == 0 ? roll + " — or click an enemy to attack now" : roll;
         }
     }
 }
