@@ -113,6 +113,10 @@ namespace Puckmite.EditorTools
             SetReference(panel, "_tuning", tuning);
             SetReference(panel, "_arena", controller);
 
+            // Both scenes share the aiming preview: optional dash tile and impact-ghost art for it.
+            SetOptionalSprite(controller, "_previewDashSprite", "Assets/Art/Sprites/UI/PreviewDash");
+            SetOptionalSprite(controller, "_previewHitGhostSprite", "Assets/Art/Sprites/UI/PreviewHitGhost");
+
             // Battle only: the hero art prefab for the player's character-row slot. Missing art is not
             // fatal — the controller falls back to its placeholder circle — so this only warns.
             if (controller is BattleController)

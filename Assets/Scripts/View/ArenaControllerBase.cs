@@ -39,8 +39,10 @@ namespace Puckmite.View
         // board sits identically in both scenes.
         private const float CameraContentTop = 25f;
 
-        // Trajectory preview: safety cap on how many steps to roll the cue forward when tracing its path.
+        // Trajectory preview: safety cap on how many steps to roll the cue forward when tracing its path,
+        // and how many impacts along it get a ghost-and-arrow readout (extras are simply not shown).
         private const int PreviewMaxSteps = 2000;
+        private const int PreviewMaxHits = 4;
 
         // Health display: max arc segments drawn around a puck (matches the health slider's max).
         private const int MaxHealthArcs = 8;
@@ -72,9 +74,16 @@ namespace Puckmite.View
         private static readonly List<int> _fillTris = new List<int>();
         private static readonly List<Color> _fillColors = new List<Color>();
         private LineRenderer _previewLine;
-        private SpriteRenderer _previewMarker; // ghost circle at the cue's predicted final position
+        private SpriteRenderer _previewMarker; // dashed ring at the cue's predicted final position
+        private SpriteRenderer[] _previewHitGhosts; // dashed ring where the cue strikes a stone (per hit)
+        private SpriteRenderer[] _previewHitArrows; // the struck stone's flight direction (per hit)
         private readonly List<Vector3> _previewPoints = new List<Vector3>();
         private float _previewMs; // last preview compute time, shown in the debug panel
+
+        // Optional preview art, wired by Setup Game Scenes when the files exist (promised paths
+        // Assets/Art/Sprites/UI/PreviewDash and /PreviewHitGhost). Procedural stand-ins until then.
+        [SerializeField] private Sprite _previewDashSprite;
+        [SerializeField] private Sprite _previewHitGhostSprite;
 
         private float _accumulator;
         protected bool _aiming;
@@ -820,11 +829,14 @@ namespace Puckmite.View
 
             _previewLine = go.AddComponent<LineRenderer>();
             _previewLine.material = new Material(Shader.Find("Sprites/Default"));
+            // Tiling a dash texture along the line draws it dashed; the user's art replaces the
+            // procedural tile when wired.
+            _previewLine.material.mainTexture = _previewDashSprite != null ? _previewDashSprite.texture : ProceduralSprites.DashTexture();
             _previewLine.useWorldSpace = true;
             _previewLine.widthMultiplier = 0.15f;
             _previewLine.numCapVertices = 2;
             _previewLine.numCornerVertices = 2;
-            _previewLine.textureMode = LineTextureMode.Stretch;
+            _previewLine.textureMode = LineTextureMode.Tile;
             _previewLine.startColor = new Color(0.55f, 0.95f, 1f, 0.9f);
             _previewLine.endColor = new Color(0.55f, 0.95f, 1f, 0.35f);
             _previewLine.sortingOrder = 12;
@@ -838,10 +850,48 @@ namespace Puckmite.View
             go.transform.SetParent(transform, false);
 
             _previewMarker = go.AddComponent<SpriteRenderer>();
-            _previewMarker.sprite = ProceduralSprites.Circle();
-            _previewMarker.color = new Color(0.55f, 0.95f, 1f, 0.35f); // translucent cyan "landing" ghost
+            _previewMarker.sprite = PreviewGhostSprite();
+            // White, not preview-cyan: the landing ghost must read apart from the impact ghosts when
+            // the path doubles back and they overlap (user feedback 2026-08-09).
+            _previewMarker.color = new Color(1f, 1f, 1f, 0.9f);
             _previewMarker.sortingOrder = 9; // just under the pucks
             _previewMarker.enabled = false;
+
+            // One ghost-and-arrow pair per possible impact readout along the path.
+            _previewHitGhosts = new SpriteRenderer[PreviewMaxHits];
+            _previewHitArrows = new SpriteRenderer[PreviewMaxHits];
+            for (int i = 0; i < PreviewMaxHits; i++)
+            {
+                GameObject ghostGo = new GameObject($"PreviewHitGhost{i}");
+                ghostGo.transform.SetParent(transform, false);
+                SpriteRenderer ghost = ghostGo.AddComponent<SpriteRenderer>();
+                ghost.sprite = PreviewGhostSprite();
+                ghost.color = new Color(0.55f, 0.95f, 1f, 0.6f);
+                ghost.sortingOrder = 9; // like the landing ghost, just under the pucks
+                ghost.enabled = false;
+                _previewHitGhosts[i] = ghost;
+
+                GameObject arrowGo = new GameObject($"PreviewHitArrow{i}");
+                arrowGo.transform.SetParent(transform, false);
+                SpriteRenderer arrow = arrowGo.AddComponent<SpriteRenderer>();
+                arrow.sprite = ProceduralSprites.Arrow();
+                arrow.color = new Color(0.55f, 0.95f, 1f, 0.8f);
+                arrow.transform.localScale = new Vector3(1.2f, 0.7f, 1f); // 1.2 long, 0.35 tall
+                arrow.sortingOrder = 12; // with the preview line, above the stones so it reads
+                arrow.enabled = false;
+                _previewHitArrows[i] = arrow;
+            }
+        }
+
+        private Sprite PreviewGhostSprite()
+        {
+            return _previewHitGhostSprite != null ? _previewHitGhostSprite : ProceduralSprites.DashedRing();
+        }
+
+        // Scales the renderer so its sprite stands worldSize tall — art of any pixel size fits the slot.
+        private static void FitSpriteScale(SpriteRenderer sr, float worldSize)
+        {
+            sr.transform.localScale = Vector3.one * (worldSize / sr.sprite.bounds.size.y);
         }
 
         // --- Trajectory preview -------------------------------------------------------------------
@@ -871,6 +921,7 @@ namespace Puckmite.View
             }
 
             _previewPoints.Add(new Vector3(cue.Position.x, cue.Position.y, 0f));
+            int hits = 0;
 
             for (int step = 0; step < PreviewMaxSteps; step++)
             {
@@ -885,14 +936,24 @@ namespace Puckmite.View
                         continue;
                     }
 
-                    if (e.PuckA == cueId)
+                    int struckId = e.PuckA == cueId ? e.PuckB : e.PuckB == cueId ? e.PuckA : -1;
+                    if (struckId < 0)
                     {
-                        clone.RemovePuck(e.PuckB);
+                        continue;
                     }
-                    else if (e.PuckB == cueId)
+
+                    // The impact readout, captured before the removal below: the cue sits at the contact
+                    // spot this step, and the collision impulse is already on the struck stone's velocity.
+                    // (A repeated event for the same stone fails the TryGetPuck and is skipped.)
+                    if (hits < PreviewMaxHits
+                        && clone.TryGetPuck(struckId, out Puck struck)
+                        && clone.TryGetPuck(cueId, out Puck cueAtHit))
                     {
-                        clone.RemovePuck(e.PuckA);
+                        PlacePreviewHit(hits, cueAtHit, struck);
+                        hits++;
                     }
+
+                    clone.RemovePuck(struckId);
                 }
 
                 if (!clone.TryGetPuck(cueId, out cue))
@@ -919,10 +980,39 @@ namespace Puckmite.View
             _previewLine.enabled = _previewPoints.Count >= 2;
 
             Vector3 landing = _previewPoints[_previewPoints.Count - 1];
-            float diameter = _tuning.PuckRadius * 2f;
             _previewMarker.transform.localPosition = new Vector3(landing.x, landing.y, 0f);
-            _previewMarker.transform.localScale = new Vector3(diameter, diameter, 1f);
+            FitSpriteScale(_previewMarker, _tuning.PuckRadius * 2f);
             _previewMarker.enabled = true;
+
+            for (int i = hits; i < PreviewMaxHits; i++)
+            {
+                _previewHitGhosts[i].enabled = false;
+                _previewHitArrows[i].enabled = false;
+            }
+        }
+
+        // One impact readout: the cue's phantom at the contact spot, plus an arrow off the struck stone's
+        // rim showing which way it will fly (direction only — the one-bumper preview never rolls the
+        // struck stone itself, design doc 6.2).
+        private void PlacePreviewHit(int index, Puck cueAtHit, Puck struck)
+        {
+            SpriteRenderer ghost = _previewHitGhosts[index];
+            ghost.transform.localPosition = new Vector3(cueAtHit.Position.x, cueAtHit.Position.y, 0f);
+            FitSpriteScale(ghost, cueAtHit.Radius * 2f);
+            ghost.enabled = true;
+
+            SpriteRenderer arrow = _previewHitArrows[index];
+            arrow.enabled = false; // stays off for a graze that barely moves the stone
+            if (struck.Velocity.sqrMagnitude < 0.0001f)
+            {
+                return;
+            }
+
+            Vector2 direction = struck.Velocity.normalized;
+            Vector2 tail = struck.Position + direction * struck.Radius;
+            arrow.transform.localPosition = new Vector3(tail.x, tail.y, 0f);
+            arrow.transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg);
+            arrow.enabled = true;
         }
 
         protected void HidePreview()
@@ -935,6 +1025,15 @@ namespace Puckmite.View
             if (_previewMarker != null)
             {
                 _previewMarker.enabled = false;
+            }
+
+            if (_previewHitGhosts != null)
+            {
+                for (int i = 0; i < _previewHitGhosts.Length; i++)
+                {
+                    _previewHitGhosts[i].enabled = false;
+                    _previewHitArrows[i].enabled = false;
+                }
             }
         }
 
