@@ -77,12 +77,17 @@ namespace Puckmite.View
         [SerializeField] private Sprite _attackIconSprite;
         [SerializeField] private Sprite _stoneIconSprite;
 
+        // Flat-colour silhouette material (PuckHero/SpriteSilhouette) behind the character outline.
+        // Created and wired by Setup Game Scenes; as a material asset it also survives shader stripping
+        // in builds, which a runtime Shader.Find would not.
+        [SerializeField] private Material _silhouetteMaterial;
+
         // Top character row (design doc 2.2). Each actor's buff is a snapshot taken when its own turn
         // ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
         private TextMeshPro[][] _statRowTexts;     // [actor][row]: the number next to each stat icon
         private SpriteRenderer[][] _statRowIcons;  // [actor][row]: wired art, or a tinted placeholder square
         private SpriteRenderer[] _characterBodies;      // indexed by actor, greyed out when the character is down
-        private SpriteRenderer[] _characterTargetRings; // ring behind a character that can be attacked right now
+        private SpriteRenderer[][] _characterOutlines;  // [actor]: silhouette ghosts forming its highlight outline
         private float[] _characterCenterY;    // per-actor body centre — art and placeholder circles differ
         private float[] _characterGrabRadius; // per-actor click/hover disc around that centre
         private int[] _actorBuffAttack;            // actor -> attack buff snapshot (0 = base only)
@@ -1586,7 +1591,7 @@ namespace Puckmite.View
             _statRowTexts = new TextMeshPro[_actorCount][];
             _statRowIcons = new SpriteRenderer[_actorCount][];
             _characterBodies = new SpriteRenderer[_actorCount];
-            _characterTargetRings = new SpriteRenderer[_actorCount];
+            _characterOutlines = new SpriteRenderer[_actorCount][];
             _characterCenterY = new float[_actorCount];
             _characterGrabRadius = new float[_actorCount];
             _actorBuffAttack = new int[_actorCount];
@@ -1639,18 +1644,9 @@ namespace Puckmite.View
 
                 _characterBodies[actor] = body;
 
-                // Target ring: same treatment the current actor's stones get, so "clickable" reads the same way.
-                GameObject ringGo = new GameObject("TargetRing");
-                ringGo.transform.SetParent(root.transform, false);
-                float ringDiameter = _characterGrabRadius[actor] * 2.1f;
-                ringGo.transform.localPosition = new Vector3(x, _characterCenterY[actor], 0f);
-                ringGo.transform.localScale = new Vector3(ringDiameter, ringDiameter, 1f);
-                SpriteRenderer ring = ringGo.AddComponent<SpriteRenderer>();
-                ring.sprite = ProceduralSprites.Circle();
-                ring.color = RingStrong;
-                ring.sortingOrder = 9; // behind the body (10), above the board
-                ring.enabled = false;
-                _characterTargetRings[actor] = ring;
+                // Highlight outline: silhouette ghosts of the body, nudged out in 8 directions, so the
+                // "clickable" treatment hugs the art — any frame, any future animation — instead of a circle.
+                _characterOutlines[actor] = BuildCharacterOutline(body);
 
                 BuildStatRows(root.transform, actor, x);
             }
@@ -2005,12 +2001,12 @@ namespace Puckmite.View
                 if (_actorDead[actor])
                 {
                     _characterBodies[actor].color = new Color(0.30f, 0.30f, 0.34f, 0.55f);
-                    _characterTargetRings[actor].enabled = false;
+                    SetOutline(actor, default, false);
                 }
                 else
                 {
                     _characterBodies[actor].color = actor == 0 && _heroBodyUsesArt ? Color.white : ActorColor(actor);
-                    UpdateCharacterRing(actor);
+                    UpdateCharacterOutline(actor);
                 }
 
                 int pending = _handPending[actor].Count;
@@ -2023,30 +2019,83 @@ namespace Puckmite.View
             }
         }
 
-        // Ring states while the player is picking a target (design doc 3.5 step 4): the attacker is ringed
-        // so it is clear who is acting, every enemy it may hit gets a faint ring, and the one under the
-        // cursor lights up fully. Outside the attack phase no character is ringed.
-        private void UpdateCharacterRing(int actor)
+        // The outline is built from eight silhouette copies of the body, each pushed out one thickness
+        // step. Overlapping ghosts stack alpha, so a translucent state needs a per-ghost sliver of alpha
+        // (OutlineFaint) rather than RingFaint's 0.25 — stacked, it reads at about the same strength.
+        private static readonly Vector2[] OutlineDirections =
         {
-            SpriteRenderer ring = _characterTargetRings[actor];
+            new Vector2(1f, 0f), new Vector2(-1f, 0f), new Vector2(0f, 1f), new Vector2(0f, -1f),
+            new Vector2(0.7071f, 0.7071f), new Vector2(-0.7071f, 0.7071f),
+            new Vector2(0.7071f, -0.7071f), new Vector2(-0.7071f, -0.7071f),
+        };
+        private const float OutlineThickness = 0.12f; // world units the silhouettes are pushed out
+        private static readonly Color OutlineFaint = new Color(1f, 0.9f, 0.25f, 0.07f);
+
+        // Eight silhouette ghosts parented under the body, so they inherit its transform (the hero art
+        // is scaled and re-centred) and, on show, its current sprite — the outline follows whatever the
+        // Animator is playing with no per-frame outline art.
+        private SpriteRenderer[] BuildCharacterOutline(SpriteRenderer body)
+        {
+            if (_silhouetteMaterial == null)
+            {
+                Debug.LogError("[PuckHero] Silhouette material is not assigned — run Tools/PuckHero/Setup Game Scenes; character highlights are off.");
+                return new SpriteRenderer[0];
+            }
+
+            SpriteRenderer[] ghosts = new SpriteRenderer[OutlineDirections.Length];
+            float parentScale = body.transform.lossyScale.x; // uniform for both body kinds
+            for (int i = 0; i < ghosts.Length; i++)
+            {
+                GameObject go = new GameObject($"Outline{i}");
+                go.transform.SetParent(body.transform, false);
+                go.transform.localPosition = OutlineDirections[i] * (OutlineThickness / parentScale);
+
+                SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+                sr.sharedMaterial = _silhouetteMaterial;
+                sr.sortingOrder = 9; // just behind the body (10)
+                sr.enabled = false;
+                ghosts[i] = sr;
+            }
+
+            return ghosts;
+        }
+
+        // Shows or hides one actor's outline, keeping the ghost sprites in step with the animating body.
+        private void SetOutline(int actor, Color color, bool on)
+        {
+            SpriteRenderer[] ghosts = _characterOutlines[actor];
+            SpriteRenderer body = _characterBodies[actor];
+            for (int i = 0; i < ghosts.Length; i++)
+            {
+                ghosts[i].enabled = on;
+                if (on)
+                {
+                    ghosts[i].sprite = body.sprite;
+                    ghosts[i].color = color;
+                }
+            }
+        }
+
+        // Outline states while the player is picking a target (design doc 3.5 step 4): the attacker is
+        // outlined so it is clear who is acting, every enemy it may hit gets a faint outline, and the one
+        // under the cursor lights up fully. Outside the attack phase the outline still marks the enemy
+        // under the cursor, tying it to the stones lit up on the board (design doc 4.1).
+        private void UpdateCharacterOutline(int actor)
+        {
             if (_awaitingAttack)
             {
                 bool strong = actor == _currentActor || actor == _hoveredCharacter;
-                ring.color = strong ? RingStrong : RingFaint;
-                ring.enabled = true;
+                SetOutline(actor, strong ? RingStrong : OutlineFaint, true);
                 return;
             }
 
-            // Outside the attack phase the ring still marks the enemy under the cursor, tying it to the
-            // stones lit up on the board (design doc 4.1).
             if (actor == _hoveredEnemyActor)
             {
-                ring.color = RingHover;
-                ring.enabled = true;
+                SetOutline(actor, RingHover, true);
                 return;
             }
 
-            ring.enabled = false;
+            SetOutline(actor, default, false);
         }
 
         // --- Game HUD -----------------------------------------------------------------------------

@@ -262,6 +262,7 @@ MonoBehaviour:
   _shieldIconSprite: {fileID: 0}
   _attackIconSprite: {fileID: 0}
   _stoneIconSprite: {fileID: 0}
+  _silhouetteMaterial: {fileID: 2100000, guid: 6734f8c9197b44641b2c935695892126, type: 2}
 --- !u!4 &1264881507
 Transform:
   m_ObjectHideFlags: 0

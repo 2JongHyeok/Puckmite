@@ -17,6 +17,8 @@ namespace Puckmite.EditorTools
     {
         private const string TuningPath = "Assets/Settings/GameTuning.asset";
         private const string HeroArtPath = "Assets/Art/Sprites/Characters/Hero.aseprite";
+        private const string SilhouetteShaderName = "PuckHero/SpriteSilhouette";
+        private const string SilhouetteMaterialPath = "Assets/Art/Materials/SpriteSilhouette.mat";
         private const string TitlePath = "Assets/Scenes/Title.unity";
         private const string BattlePath = "Assets/Scenes/Battle.unity";
         private const string ShopPath = "Assets/Scenes/Shop.unity";
@@ -124,6 +126,14 @@ namespace Puckmite.EditorTools
                     SetReference(controller, "_heroBodyPrefab", heroArt);
                 }
 
+                // The character-outline silhouette material, created next to its shader on first run.
+                // A real asset (not a runtime Material) so the scene reference keeps the shader in builds.
+                Material silhouette = EnsureSilhouetteMaterial();
+                if (silhouette != null)
+                {
+                    SetReference(controller, "_silhouetteMaterial", silhouette);
+                }
+
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
                 SetOptionalSprite(controller, "_groundSprite", "Assets/Art/Sprites/Environment/Ground");
@@ -165,6 +175,28 @@ namespace Puckmite.EditorTools
             }
 
             EditorSceneManager.SaveScene(scene, path);
+        }
+
+        // Finds or creates the flat-colour silhouette material the character outline draws with. Created
+        // through the API (project rule: no hand-editing Unity YAML) beside its shader.
+        private static Material EnsureSilhouetteMaterial()
+        {
+            Material material = AssetDatabase.LoadAssetAtPath<Material>(SilhouetteMaterialPath);
+            if (material != null)
+            {
+                return material;
+            }
+
+            Shader shader = Shader.Find(SilhouetteShaderName);
+            if (shader == null)
+            {
+                Debug.LogError($"[PuckHero] Shader '{SilhouetteShaderName}' not found — character highlights will be off.");
+                return null;
+            }
+
+            material = new Material(shader);
+            AssetDatabase.CreateAsset(material, SilhouetteMaterialPath);
+            return material;
         }
 
         // An optional art slot: tries the promised path as .png first, then .aseprite. A missing file is
