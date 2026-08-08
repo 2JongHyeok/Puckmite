@@ -258,10 +258,10 @@ MonoBehaviour:
   _tuning: {fileID: 11400000, guid: dba168e68fa84464d81f3c3288574921, type: 2}
   _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
   _groundSprite: {fileID: 0}
-  _healthIconSprite: {fileID: 0}
-  _shieldIconSprite: {fileID: 0}
-  _attackIconSprite: {fileID: 0}
-  _stoneIconSprite: {fileID: 0}
+  _healthIconSprite: {fileID: 7172269534363851296, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _shieldIconSprite: {fileID: -6791987299007039944, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _attackIconSprite: {fileID: 3994866376848337748, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _stoneIconSprite: {fileID: -3485401350434060962, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _silhouetteMaterial: {fileID: 2100000, guid: 6734f8c9197b44641b2c935695892126, type: 2}
 --- !u!4 &1264881507
 Transform:

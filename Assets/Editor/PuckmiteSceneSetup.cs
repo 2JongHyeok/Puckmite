@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using Puckmite.View;
 using UnityEditor;
@@ -137,10 +138,7 @@ namespace Puckmite.EditorTools
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
                 SetOptionalSprite(controller, "_groundSprite", "Assets/Art/Sprites/Environment/Ground");
-                SetOptionalSprite(controller, "_healthIconSprite", "Assets/Art/Sprites/UI/StatHealth");
-                SetOptionalSprite(controller, "_shieldIconSprite", "Assets/Art/Sprites/UI/StatShield");
-                SetOptionalSprite(controller, "_attackIconSprite", "Assets/Art/Sprites/UI/StatAttack");
-                SetOptionalSprite(controller, "_stoneIconSprite", "Assets/Art/Sprites/UI/StatStones");
+                WireStatIcons(controller);
             }
 
             EditorSceneManager.SaveScene(scene, path);
@@ -197,6 +195,40 @@ namespace Puckmite.EditorTools
             material = new Material(shader);
             AssetDatabase.CreateAsset(material, SilhouetteMaterialPath);
             return material;
+        }
+
+        private const string StatIconSheetPath = "Assets/Art/Sprites/UI/stat_icons_sheet.aseprite";
+
+        // The stat icons live in one Aseprite sheet, one icon per frame in draw order: health, shield,
+        // attack, stones (Frame_4, the dark stone, is reserved — 2026-08-08 user decision). Reordering
+        // frames in the file shifts this mapping. Falls back to the individual promised files when the
+        // sheet or a frame is missing.
+        private static void WireStatIcons(Object controller)
+        {
+            string[] fields = { "_healthIconSprite", "_shieldIconSprite", "_attackIconSprite", "_stoneIconSprite" };
+            string[] frames = { "Frame_0", "Frame_1", "Frame_2", "Frame_3" };
+            string[] fallbacks = { "StatHealth", "StatShield", "StatAttack", "StatStones" };
+
+            Dictionary<string, Sprite> byName = new Dictionary<string, Sprite>();
+            foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(StatIconSheetPath))
+            {
+                if (asset is Sprite sprite)
+                {
+                    byName[sprite.name] = sprite;
+                }
+            }
+
+            for (int i = 0; i < fields.Length; i++)
+            {
+                if (byName.TryGetValue(frames[i], out Sprite sheetSprite))
+                {
+                    SetReference(controller, fields[i], sheetSprite);
+                }
+                else
+                {
+                    SetOptionalSprite(controller, fields[i], "Assets/Art/Sprites/UI/" + fallbacks[i]);
+                }
+            }
         }
 
         // An optional art slot: tries the promised path as .png first, then .aseprite. A missing file is

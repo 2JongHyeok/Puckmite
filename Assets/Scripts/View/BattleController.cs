@@ -1743,6 +1743,8 @@ namespace Puckmite.View
                 {
                     icon.sprite = icons[row];
                     iconGo.transform.localScale = Vector3.one * (0.9f / icon.bounds.size.y);
+                    // The import pivots sit below the art; re-centre the visual on the row line.
+                    iconGo.transform.position += root.TransformPoint(new Vector3(x - 1.4f, y, 0f)) - icon.bounds.center;
                 }
                 else
                 {
