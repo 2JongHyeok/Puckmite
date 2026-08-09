@@ -125,6 +125,39 @@ namespace Puckmite.View
         private bool _gameOver;
         private readonly List<int> _removeIds = new List<int>(); // reused: stones of an actor that just died
 
+        // The buff flight (사용자 지정 2026-08-10): after the roll settles (or the skip button), the
+        // captured buff flies icon-by-icon from its cells to the actor's stat rows before anything
+        // attacks. The buff itself is applied at capture — the flight only paces the shown numbers via
+        // the pending counters, which UpdateCharacterStats subtracts until each icon lands.
+        private bool _buffFlightActive;
+        private float _postFlightTimer;             // the enemy's breath between landing and striking
+        private const float EnemyStrikeDelay = 0.5f; // 사용자 지정 2026-08-10
+        private const float BuffFlightLead = 0.15f;
+        private int[] _pendingShownAttack;
+        private int[] _pendingShownShield;
+        private Vector2[][] _statRowIconWorld;      // [actor][row] icon centres, the flight targets
+
+        // 발사 스킵 (사용자 지정 2026-08-10): the pre-roll enemy click is gone — skipping the roll is
+        // this explicit button under the left info column, art via the promised path UI/btn_skip_roll.
+        [SerializeField] private Sprite _skipButtonSprite;
+        private static readonly Vector2 SkipButtonPos = new Vector2(-19f, -6f);
+        private static readonly Vector2 SkipButtonSize = new Vector2(9f, 3.5f);
+        private SpriteRenderer _skipOutline;
+        private SpriteRenderer _skipBg;
+        private bool _skipUsesArt;
+
+        // Hit blink (사용자 지정 2026-08-10): a struck character flickers visible/invisible for a beat.
+        private const float HitFlashDuration = 0.48f;
+        private const float HitFlashInterval = 0.08f;
+        private float[] _hitFlashUntil;
+
+        // Death sink (사용자 지정 2026-08-10): a downed character slides below the ground line over one
+        // second, clipped by a mask at the feet, then hides — replacing the old grey-tint stance.
+        private const float DeathSinkDuration = 1f;
+        private float[] _deathSinkStart;   // Time.time at death; 0 = not sinking
+        private float[] _deathSinkBaseY;   // the body's world y when the sink began
+        private float[] _deathSinkDepth;   // how far down it travels (its own height)
+
         // A turn with nothing to roll: show that, then attack with base damage and end it (design doc 3.5).
         private bool _noStoneTurn;
         private float _noStoneTimer;
@@ -500,9 +533,24 @@ namespace Puckmite.View
                 if (_noStoneTimer <= 0f)
                 {
                     _noStoneTurn = false;
-                    CaptureActorBuff(_currentActor); // no stones, so this is base stats only
+                    CaptureActorBuff(_currentActor); // nothing to roll; parked stones still count
                     if (!_gameOver) // corrupted shield cells can end the run inside the capture
                     {
+                        BeginBuffFlight();
+                    }
+                }
+            }
+
+            // The buff flight between capture and attack (사용자 지정 2026-08-10): once every icon has
+            // landed, the player gets the target pick — an enemy strikes after a further short breath.
+            if (!_gameOver && _buffFlightActive)
+            {
+                if (!TickIconFlights(Time.deltaTime))
+                {
+                    _postFlightTimer += Time.deltaTime;
+                    if (_currentActor == 0 || _postFlightTimer >= EnemyStrikeDelay)
+                    {
+                        _buffFlightActive = false;
                         BeginAttackPhase();
                     }
                 }
@@ -511,7 +559,7 @@ namespace Puckmite.View
             // An enemy turn drives itself: after a short think pause, search for the best shot on a
             // background task (frames — and the idle animations — keep running), then fire the result.
             if (!_gameOver && _tuning.EnemyAiEnabled && _currentActor != 0 && !_actorDead[_currentActor]
-                && !_hasRolledThisTurn && !_noStoneTurn && !_awaitingAttack && _sim.AllAtRest())
+                && !_hasRolledThisTurn && !_noStoneTurn && !_awaitingAttack && !_buffFlightActive && _sim.AllAtRest())
             {
                 if (_planTask == null)
                 {
@@ -528,13 +576,13 @@ namespace Puckmite.View
                 }
             }
 
-            // Rolled and the board has settled: lock in the buff (step 3), then attack (step 4).
-            if (!_gameOver && !_awaitingAttack && _hasRolledThisTurn && _sim.AllAtRest())
+            // Rolled and the board has settled: lock in the buff (step 3), fly it home, then attack.
+            if (!_gameOver && !_awaitingAttack && !_buffFlightActive && _hasRolledThisTurn && _sim.AllAtRest())
             {
                 CaptureActorBuff(_currentActor);
                 if (!_gameOver) // corrupted shield cells can end the run inside the capture
                 {
-                    BeginAttackPhase();
+                    BeginBuffFlight();
                 }
             }
 
@@ -542,6 +590,7 @@ namespace Puckmite.View
             UpdateCellHighlights();
             UpdateBossEffectVisuals();
             UpdateTurnHighlights();
+            UpdateSkipButton();
             UpdateGhost();
             UpdateHoverHighlight(); // before the character row, which reads the hovered enemy
             UpdateCharacterStats();
@@ -763,30 +812,8 @@ namespace Puckmite.View
                 return;
             }
 
-            // Skipping the roll (사용자 지정 — the forced roll of design doc 3.5 is now optional): before
-            // rolling, clicking an enemy character attacks at once with the board exactly as it stands,
-            // and the turn ends. Player only, and only while everything is at rest — a click while stones
-            // are still moving must not fire this.
-            if (_currentActor == 0 && !_hasRolledThisTurn && !_noStoneTurn && !_aiming
-                && mouse.leftButton.wasPressedThisFrame && !PointerOverHud(screen) && _sim.AllAtRest())
-            {
-                int skipTarget = CharacterAt(world);
-                if (skipTarget > 0 && !_actorDead[skipTarget])
-                {
-                    CaptureActorBuff(_currentActor); // "현재 보드 상태로" — the snapshot is taken right now
-                    if (!_gameOver) // corrupted shield cells can end the run inside the capture
-                    {
-                        ResolveAttack(_currentActor, skipTarget);
-                    }
-
-                    if (!_gameOver)
-                    {
-                        AdvanceTurn();
-                    }
-
-                    return;
-                }
-            }
+            // Skipping the roll moved to the explicit 발사 스킵 button (사용자 지정 2026-08-10) — a
+            // pre-roll click on an enemy no longer attacks; the pick only opens after the buff flight.
 
             UpdateGhostAim(world);
 
@@ -1288,6 +1315,12 @@ namespace Puckmite.View
                 _actorHealth[target] = 0;
                 KillActor(target);
             }
+            else if (damage > 0)
+            {
+                // Hit blink (사용자 지정 2026-08-10): the struck character flickers for a beat. A killing
+                // blow skips it — the death sink is the feedback there.
+                _hitFlashUntil[target] = Time.time + HitFlashDuration;
+            }
 
             CheckGameOver();
         }
@@ -1307,6 +1340,17 @@ namespace Puckmite.View
             _actorBaseShield[actor] = 0;
             _actorEffectShield[actor] = 0;
             _actorBuffAttack[actor] = 0;
+
+            // Death sink (사용자 지정 2026-08-10): the body slides below the ground line over a second,
+            // clipped by the shared feet-line mask, then hides.
+            if (_characterBodies != null && _characterBodies[actor] != null)
+            {
+                SpriteRenderer body = _characterBodies[actor];
+                _deathSinkStart[actor] = Time.time;
+                _deathSinkBaseY[actor] = body.transform.position.y;
+                _deathSinkDepth[actor] = body.bounds.size.y + 0.5f;
+                body.maskInteraction = SpriteMaskInteraction.VisibleInsideMask;
+            }
             _handReady[actor].Clear();   // a character that is out keeps nothing in hand
             _handPending[actor].Clear();
             if (_ghostActive && _actorOf[_ghost.Id] == actor)
@@ -1529,6 +1573,94 @@ namespace Puckmite.View
             _actorEffectShield[actor] = 0;
         }
 
+        // Sends the just-captured buff up as icons (사용자 지정 2026-08-10): one per point, from the cell
+        // that granted it to the current actor's shield/attack row. Corrupted (negative) contributions
+        // applied silently at capture and fly nothing. With nothing to fly, the attack follows at once.
+        private void BeginBuffFlight()
+        {
+            if (SpawnBuffFlights(_currentActor) == 0)
+            {
+                BeginAttackPhase();
+                return;
+            }
+
+            _buffFlightActive = true;
+            _postFlightTimer = 0f;
+        }
+
+        // The same walk as CaptureActorBuff, spawning instead of summing — so the icons rise from
+        // exactly the cells the snapshot counted.
+        private int SpawnBuffFlights(int actor)
+        {
+            _pendingShownAttack[actor] = 0;
+            _pendingShownShield[actor] = 0;
+
+            int spawned = 0;
+            float start = BuffFlightLead;
+            Vector2 boardMin = _sim.BoardMin;
+            Vector2 boardMax = _sim.BoardMax;
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                Puck p = pucks[i];
+                if (_actorOf[p.Id] != actor)
+                {
+                    continue;
+                }
+
+                BoardCells.GetOccupiedCells(boardMin, boardMax, p.Position, p.Radius, OccupancyThreshold, _occupiedCells);
+                for (int c = 0; c < _occupiedCells.Count; c++)
+                {
+                    int index = _occupiedCells[c];
+                    int col = index % BoardCells.Size;
+                    int row = index / BoardCells.Size;
+                    if (BoardCells.TypeOf(col, row) != CellType.Buff || _debuffCells.Contains(index))
+                    {
+                        continue;
+                    }
+
+                    bool isAttack = BoardCells.KindOf(col, row) == BuffKind.Attack;
+                    int points = BoardCells.BuffValue(col, row) * p.Level;
+                    Vector2 from = BoardCells.CellCenter(boardMin, boardMax, col, row);
+                    for (int n = 0; n < points; n++)
+                    {
+                        SpawnBuffFlightIcon(actor, isAttack, from, start);
+                        start += IconFlightStagger;
+                        spawned++;
+                    }
+                }
+            }
+
+            return spawned;
+        }
+
+        private void SpawnBuffFlightIcon(int actor, bool isAttack, Vector2 from, float start)
+        {
+            Sprite sprite = isAttack ? _attackIconSprite : _shieldIconSprite;
+            Color fallback = isAttack ? new Color(0.95f, 0.60f, 0.20f) : new Color(0.35f, 0.55f, 0.90f);
+            Vector2 to = _statRowIconWorld[actor][isAttack ? 2 : 1];
+            if (isAttack)
+            {
+                _pendingShownAttack[actor]++;
+            }
+            else
+            {
+                _pendingShownShield[actor]++;
+            }
+
+            SpawnIconFlight(sprite, fallback, from, to, start, () =>
+            {
+                if (isAttack)
+                {
+                    _pendingShownAttack[actor] = Mathf.Max(0, _pendingShownAttack[actor] - 1);
+                }
+                else
+                {
+                    _pendingShownShield[actor] = Mathf.Max(0, _pendingShownShield[actor] - 1);
+                }
+            });
+        }
+
         // --- Battle-only view construction ----------------------------------------------------------
 
         private void BuildBoard()
@@ -1743,6 +1875,13 @@ namespace Puckmite.View
             _actorEffectShield = new int[_actorCount];
             _actorDead = new bool[_actorCount];
             _actorTurnCounts = new int[_actorCount];
+            _pendingShownAttack = new int[_actorCount];
+            _pendingShownShield = new int[_actorCount];
+            _statRowIconWorld = new Vector2[_actorCount][];
+            _hitFlashUntil = new float[_actorCount];
+            _deathSinkStart = new float[_actorCount];
+            _deathSinkBaseY = new float[_actorCount];
+            _deathSinkDepth = new float[_actorCount];
             _handReady = new List<int>[_actorCount];
             _handPending = new List<int>[_actorCount];
             for (int actor = 0; actor < _actorCount; actor++)
@@ -1752,6 +1891,15 @@ namespace Puckmite.View
             }
 
             ResetCombatState();
+
+            // The death sink's clip (사용자 지정 2026-08-10): one shared mask covering everything above
+            // the feet line. Only a dying body opts in (VisibleInsideMask), so the living are untouched
+            // and the sinking one vanishes below the ground instead of sliding over it.
+            GameObject maskGo = new GameObject("CharacterGroundMask");
+            maskGo.transform.SetParent(transform, false);
+            maskGo.transform.localPosition = new Vector3(0f, CharFeetY + 10f, 0f);
+            maskGo.transform.localScale = new Vector3(72f, 20f, 1f);
+            maskGo.AddComponent<SpriteMask>().sprite = ProceduralSprites.Unit();
 
             for (int actor = 0; actor < _actorCount; actor++)
             {
@@ -1933,9 +2081,11 @@ namespace Puckmite.View
             Sprite[] icons = { _healthIconSprite, _shieldIconSprite, _attackIconSprite, _stoneIconSprite };
             _statRowTexts[actor] = new TextMeshPro[StatRowCount];
             _statRowIcons[actor] = new SpriteRenderer[StatRowCount];
+            _statRowIconWorld[actor] = new Vector2[StatRowCount];
             for (int row = 0; row < StatRowCount; row++)
             {
                 float y = StatBlockBottom + (StatRowCount - row - 0.5f) * StatRowHeight;
+                _statRowIconWorld[actor][row] = new Vector2(x - 1.4f, y); // the buff flight's target
 
                 GameObject iconGo = new GameObject($"StatIcon{row}");
                 iconGo.transform.SetParent(root, false);
@@ -2222,19 +2372,39 @@ namespace Puckmite.View
             {
                 if (_actorDead[actor])
                 {
-                    _characterBodies[actor].color = new Color(0.30f, 0.30f, 0.34f, 0.55f);
                     SetOutline(actor, default, false);
+
+                    // Death sink (사용자 지정 2026-08-10): slide below the feet line, then stay hidden.
+                    SpriteRenderer deadBody = _characterBodies[actor];
+                    float sinceDeath = Time.time - _deathSinkStart[actor];
+                    if (_deathSinkStart[actor] > 0f && sinceDeath < DeathSinkDuration)
+                    {
+                        Vector3 pos = deadBody.transform.position;
+                        pos.y = _deathSinkBaseY[actor] - _deathSinkDepth[actor] * (sinceDeath / DeathSinkDuration);
+                        deadBody.transform.position = pos;
+                    }
+                    else if (deadBody.enabled)
+                    {
+                        deadBody.enabled = false;
+                    }
                 }
                 else
                 {
-                    _characterBodies[actor].color = _bodyUsesArt[actor] ? Color.white : ActorColor(actor);
+                    Color bodyColor = _bodyUsesArt[actor] ? Color.white : ActorColor(actor);
+                    if (Time.time < _hitFlashUntil[actor]
+                        && Mathf.FloorToInt((_hitFlashUntil[actor] - Time.time) / HitFlashInterval) % 2 == 1)
+                    {
+                        bodyColor.a = 0f; // hit blink (사용자 지정 2026-08-10): 보임/안 보임 교차
+                    }
+
+                    _characterBodies[actor].color = bodyColor;
                     UpdateCharacterOutline(actor);
                 }
 
                 int pending = _handPending[actor].Count;
                 _statRowTexts[actor][0].text = $"{_actorHealth[actor]}/{BaseHealth(actor)}";
-                _statRowTexts[actor][1].text = $"x {_actorBaseShield[actor] + _actorEffectShield[actor]}";
-                _statRowTexts[actor][2].text = $"x {BaseAttack(actor) + _actorBuffAttack[actor]}";
+                _statRowTexts[actor][1].text = $"x {_actorBaseShield[actor] + _actorEffectShield[actor] - _pendingShownShield[actor]}";
+                _statRowTexts[actor][2].text = $"x {BaseAttack(actor) + _actorBuffAttack[actor] - _pendingShownAttack[actor]}";
                 _statRowTexts[actor][3].text = pending > 0
                     ? $"x {_handReady[actor].Count} (+{pending})"
                     : $"x {_handReady[actor].Count}";
@@ -2280,6 +2450,95 @@ namespace Puckmite.View
                 : $"스테이지 {Campaign.Stage}-{Campaign.Run}";
             MakeInfoBox("StageBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = stage;
             _turnText = MakeInfoBox("TurnBox", new Vector2(-19f, 1.5f), new Vector2(9f, 6f));
+            BuildSkipButton();
+        }
+
+        // 발사 스킵 (사용자 지정 2026-08-10): under the turn box, spaced like the column above it. Art via
+        // the promised path; without it the info-box treatment carries a Korean label. The usual button
+        // language: yellow outline on hover, dimmed while unavailable.
+        private void BuildSkipButton()
+        {
+            _skipOutline = MakeQuad("SkipOutline", transform, SkipButtonPos,
+                SkipButtonSize + new Vector2(0.4f, 0.4f), new Color(1f, 0.9f, 0.25f, 0.9f), 14);
+            _skipOutline.enabled = false;
+
+            if (_skipButtonSprite != null)
+            {
+                _skipUsesArt = true;
+                GameObject go = new GameObject("SkipButton");
+                go.transform.SetParent(transform, false);
+                _skipBg = go.AddComponent<SpriteRenderer>();
+                _skipBg.sprite = _skipButtonSprite;
+                _skipBg.sortingOrder = 15;
+                Bounds b = _skipButtonSprite.bounds;
+                Vector3 scale = new Vector3(SkipButtonSize.x / b.size.x, SkipButtonSize.y / b.size.y, 1f);
+                go.transform.localScale = scale;
+                go.transform.localPosition = new Vector3(
+                    SkipButtonPos.x - b.center.x * scale.x, SkipButtonPos.y - b.center.y * scale.y, 0f);
+            }
+            else
+            {
+                TextMeshPro label = MakeInfoBox("SkipButton", SkipButtonPos, SkipButtonSize);
+                label.text = "발사 스킵";
+                _skipBg = label.transform.parent.Find("Bg").GetComponent<SpriteRenderer>();
+            }
+        }
+
+        // The skip is a legal move exactly when a roll would be: the player's turn, nothing rolled or in
+        // flight yet, the board at rest. Clicking locks the roll and flies the buff home.
+        private void UpdateSkipButton()
+        {
+            if (_skipBg == null)
+            {
+                return;
+            }
+
+            bool available = !_gameOver && _currentActor == 0 && !_hasRolledThisTurn && !_noStoneTurn
+                && !_awaitingAttack && !_buffFlightActive && !_aiming && _sim.AllAtRest()
+                && (_victoryPanel == null || !_victoryPanel.IsShown);
+
+            Color bg = _skipUsesArt ? Color.white : new Color(0.14f, 0.17f, 0.24f, 0.9f);
+            if (!available)
+            {
+                bg.a *= 0.5f;
+            }
+
+            _skipBg.color = bg;
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                _skipOutline.enabled = false;
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            Vector2 world = ScreenToWorld(screen);
+            bool hover = available && !PointerOverHud(screen)
+                && Mathf.Abs(world.x - SkipButtonPos.x) <= SkipButtonSize.x * 0.5f
+                && Mathf.Abs(world.y - SkipButtonPos.y) <= SkipButtonSize.y * 0.5f;
+            _skipOutline.enabled = hover;
+
+            if (hover && mouse.leftButton.wasPressedThisFrame)
+            {
+                SkipRoll();
+            }
+        }
+
+        // The explicit no-roll turn (replacing the pre-roll enemy click): lock the roll, take the board
+        // exactly as it stands, and fly the buff home — the target pick opens once it lands.
+        private void SkipRoll()
+        {
+            _hasRolledThisTurn = true; // the ghost hides and the roll is spent for this turn
+            _aiming = false;
+            _aimingPuckId = -1;
+            HidePreview();
+            ClearGhost();
+            CaptureActorBuff(0);
+            if (!_gameOver) // corrupted shield cells can end the run inside the capture
+            {
+                BeginBuffFlight();
+            }
         }
 
         // The enemy tooltip (사용자 지정): creature name and ability while the cursor rests on a living

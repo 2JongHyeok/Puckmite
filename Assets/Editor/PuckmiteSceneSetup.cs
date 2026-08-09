@@ -176,6 +176,7 @@ namespace Puckmite.EditorTools
                 SetOptionalSprite(controller, "_victoryPanelSprite", "Assets/Art/Sprites/UI/VictoryPanel");
                 SetOptionalSprite(controller, "_victoryButtonSprite", "Assets/Art/Sprites/UI/VictoryButton");
                 SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/Gold");
+                SetOptionalSprite(controller, "_skipButtonSprite", "Assets/Art/Sprites/UI/btn_skip_roll");
                 WireStatIcons(controller);
             }
             else

@@ -126,6 +126,107 @@ namespace Puckmite.View
             go.transform.position += new Vector3(0f, 6.25f, 0f) - sr.bounds.center;
         }
 
+        // --- Icon flights (버프·정산 연출 공용, 사용자 지정 2026-08-10) ------------------------------
+
+        // A small icon that rises from a board cell to a stat row: the battle's buff capture and the
+        // shop's leave settlement both spawn these. Purely cosmetic — the state a flight visualises is
+        // already applied when it spawns; OnLand only paces the shown numbers.
+        private struct IconFlight
+        {
+            public Vector2 From;
+            public Vector2 To;
+            public float Start;
+            public Vector3 CenterOffset;
+            public GameObject Go;
+            public System.Action OnLand;
+        }
+
+        private readonly List<IconFlight> _iconFlights = new List<IconFlight>();
+        private float _iconFlightClock;
+        protected const float IconFlightDuration = 0.4f;
+        protected const float IconFlightStagger = 0.06f;
+
+        protected bool HasIconFlights => _iconFlights.Count > 0;
+
+        protected void SpawnIconFlight(Sprite sprite, Color fallbackTint, Vector2 from, Vector2 to, float start, System.Action onLand)
+        {
+            if (_iconFlights.Count == 0)
+            {
+                _iconFlightClock = 0f; // a fresh batch starts its own clock
+            }
+
+            GameObject go = new GameObject("FlightIcon");
+            go.transform.SetParent(transform, false);
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sortingOrder = 30;
+            if (sprite != null)
+            {
+                sr.sprite = sprite;
+                go.transform.localScale = Vector3.one * (0.9f / sr.bounds.size.y);
+            }
+            else
+            {
+                sr.sprite = ProceduralSprites.Unit();
+                sr.color = fallbackTint;
+                go.transform.localScale = new Vector3(0.7f, 0.7f, 1f);
+            }
+
+            go.transform.localPosition = new Vector3(from.x, from.y, 0f);
+            Vector3 centerOffset = go.transform.position - sr.bounds.center;
+            go.SetActive(false);
+
+            _iconFlights.Add(new IconFlight
+            {
+                From = from,
+                To = to,
+                Start = start,
+                CenterOffset = centerOffset,
+                Go = go,
+                OnLand = onLand,
+            });
+        }
+
+        // Drives every live flight; call once per frame while any are up. Each icon waits for its slot,
+        // rises on an eased arc, and fires OnLand as it is removed. Returns true while any remain.
+        protected bool TickIconFlights(float dt)
+        {
+            if (_iconFlights.Count == 0)
+            {
+                return false;
+            }
+
+            _iconFlightClock += dt;
+            for (int i = _iconFlights.Count - 1; i >= 0; i--)
+            {
+                IconFlight f = _iconFlights[i];
+                if (_iconFlightClock < f.Start)
+                {
+                    continue;
+                }
+
+                float t = Mathf.Clamp01((_iconFlightClock - f.Start) / IconFlightDuration);
+                if (t >= 1f)
+                {
+                    Destroy(f.Go);
+                    _iconFlights.RemoveAt(i);
+                    f.OnLand?.Invoke();
+                    continue;
+                }
+
+                if (!f.Go.activeSelf)
+                {
+                    f.Go.SetActive(true);
+                }
+
+                float ease = t * t * (3f - 2f * t);
+                Vector2 pos = Vector2.Lerp(f.From, f.To, ease);
+                pos.y += 1.2f * 4f * t * (1f - t); // a little lift so the path reads as a toss
+                f.Go.transform.position = new Vector3(pos.x, pos.y, 0f) + f.CenterOffset;
+            }
+
+            return _iconFlights.Count > 0;
+        }
+
         // A labelled info box for the corner UI (dark placeholder rect + Korean-capable TMP), shared by
         // the battle's stage/turn boxes and the shop's label.
         protected TextMeshPro MakeInfoBox(string name, Vector2 center, Vector2 size)

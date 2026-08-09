@@ -110,26 +110,13 @@ namespace Puckmite.View
         private Vector2[] _statRowIconPos;          // world centre of each row's icon, the flight targets
 
         // The leave settlement flight (사용자 지정 2026-08-10): one icon per settled point rises from its
-        // board cell to its stat row, the shown number ticking up as each lands; the campaign state is
-        // already final when the flight starts (display only), then the next run loads after a beat.
-        private const float SettleFlightDuration = 0.4f;
-        private const float SettleFlightStagger = 0.06f;
+        // board cell to its stat row (base icon-flight utility), the shown number ticking up as each
+        // lands; the campaign state is already final when the flight starts (display only), then the
+        // next run loads after a beat.
         private const float SettleFlightLead = 0.15f;  // breath between the click and the first launch
         private const float SettleLoadBeat = 0.35f;    // pause after the last landing, before the scene
-        private struct SettleFlight
-        {
-            public int Row;           // stat row it flies to (0 health, 1 shield, 2 attack)
-            public int LandDelta;     // shown-stat bump on landing (run-heal lands silently)
-            public Vector2 From;
-            public float Start;
-            public Vector3 CenterOffset; // sprite pivot-to-bounds-centre shim, fixed at spawn
-            public GameObject Go;
-            public bool Landed;
-        }
-        private readonly List<SettleFlight> _flights = new List<SettleFlight>();
         private readonly List<int> _settleCells = new List<int>(); // reused per stone, like the sim's
         private bool _leaving;
-        private float _leaveClock;
         private float _leaveLoadTimer;
         private int _shownMaxHealth;
         private int _shownShield;
@@ -298,7 +285,6 @@ namespace Puckmite.View
             }
 
             _leaving = true;
-            _leaveClock = 0f;
             _leaveLoadTimer = 0f;
         }
 
@@ -306,7 +292,7 @@ namespace Puckmite.View
         // ShopBoard.SumUpgrades, per (stone, cell) pair so the icons rise from where the value sits.
         private int BuildSettleFlights()
         {
-            _flights.Clear();
+            int spawned = 0;
             float start = SettleFlightLead;
             IReadOnlyList<Puck> pucks = _sim.Pucks;
             for (int i = 0; i < pucks.Count; i++)
@@ -329,12 +315,13 @@ namespace Puckmite.View
                     for (int n = 0; n < points; n++)
                     {
                         SpawnSettleFlight(cell.Kind, from, start);
-                        start += SettleFlightStagger;
+                        start += IconFlightStagger;
+                        spawned++;
                     }
                 }
             }
 
-            return _flights.Count;
+            return spawned;
         }
 
         // Attack and shield fly to their rows; run-heal and max-health both fly to the health row
@@ -365,39 +352,26 @@ namespace Puckmite.View
                     break;
             }
 
-            GameObject go = new GameObject("SettleIcon");
-            go.transform.SetParent(transform, false);
-            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
-            sr.sortingOrder = 30;
-            if (sprite != null)
+            SpawnIconFlight(sprite, fallbackTint, from, _statRowIconPos[row], start, () => ApplySettleLand(row, landDelta));
+        }
+
+        private void ApplySettleLand(int row, int delta)
+        {
+            if (row == 0)
             {
-                sr.sprite = sprite;
-                go.transform.localScale = Vector3.one * (0.9f / sr.bounds.size.y);
+                _shownMaxHealth += delta;
+            }
+            else if (row == 1)
+            {
+                _shownShield += delta;
             }
             else
             {
-                sr.sprite = ProceduralSprites.Unit();
-                sr.color = fallbackTint;
-                go.transform.localScale = new Vector3(0.7f, 0.7f, 1f);
+                _shownAttack += delta;
             }
-
-            go.transform.localPosition = new Vector3(from.x, from.y, 0f);
-            Vector3 centerOffset = go.transform.position - sr.bounds.center;
-            go.SetActive(false);
-
-            _flights.Add(new SettleFlight
-            {
-                Row = row,
-                LandDelta = landDelta,
-                From = from,
-                Start = start,
-                CenterOffset = centerOffset,
-                Go = go,
-            });
         }
 
-        // Drives the settle icons: each waits for its slot, rises on an eased arc, bumps its row's shown
-        // number on arrival, and once every one has landed the next run loads after a short beat.
+        // Drives the settle icons; once every one has landed the next run loads after a short beat.
         private void TickLeaveFlights()
         {
             if (!_leaving)
@@ -405,66 +379,16 @@ namespace Puckmite.View
                 return;
             }
 
-            _leaveClock += Time.deltaTime;
-
-            bool allLanded = true;
-            for (int i = 0; i < _flights.Count; i++)
+            if (TickIconFlights(Time.deltaTime))
             {
-                SettleFlight f = _flights[i];
-                if (f.Landed)
-                {
-                    continue;
-                }
-
-                if (_leaveClock < f.Start)
-                {
-                    allLanded = false;
-                    continue;
-                }
-
-                float t = Mathf.Clamp01((_leaveClock - f.Start) / SettleFlightDuration);
-                if (t >= 1f)
-                {
-                    if (f.Row == 0)
-                    {
-                        _shownMaxHealth += f.LandDelta;
-                    }
-                    else if (f.Row == 1)
-                    {
-                        _shownShield += f.LandDelta;
-                    }
-                    else
-                    {
-                        _shownAttack += f.LandDelta;
-                    }
-
-                    Destroy(f.Go);
-                    f.Landed = true;
-                    _flights[i] = f;
-                    continue;
-                }
-
-                allLanded = false;
-                if (!f.Go.activeSelf)
-                {
-                    f.Go.SetActive(true);
-                }
-
-                float ease = t * t * (3f - 2f * t);
-                Vector2 pos = Vector2.Lerp(f.From, _statRowIconPos[f.Row], ease);
-                pos.y += 1.2f * 4f * t * (1f - t); // a little lift so the path reads as a toss
-                f.Go.transform.position = new Vector3(pos.x, pos.y, 0f) + f.CenterOffset;
-                _flights[i] = f;
+                return;
             }
 
-            if (allLanded)
+            _leaveLoadTimer += Time.deltaTime;
+            if (_leaveLoadTimer >= SettleLoadBeat)
             {
-                _leaveLoadTimer += Time.deltaTime;
-                if (_leaveLoadTimer >= SettleLoadBeat)
-                {
-                    _leaving = false; // one shot: the load below tears the scene down
-                    GameFlow.LoadBattle();
-                }
+                _leaving = false; // one shot: the load below tears the scene down
+                GameFlow.LoadBattle();
             }
         }
 
