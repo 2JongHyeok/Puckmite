@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Puckmite.Sim;
 using TMPro;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.Rendering.Universal;
 
 namespace Puckmite.View
@@ -108,6 +109,17 @@ namespace Puckmite.View
         [SerializeField] protected Sprite _cellDamageSprite;       // Frame_6: hazard stripes
         [SerializeField] protected Sprite _cellEmptySprite;        // Frame_7: plain
 
+        // The game's sounds (사용자 사운드 2026-08-10, Assets/Sound/), wired by Setup for both arena
+        // scenes. The per-clip gains even out the measured loudness (RMS: impact 0.111, buff 0.058,
+        // hit 0.153) with the buff trimmed for its cascades; the ESC menu's sliders scale on top.
+        [SerializeField] protected AudioClip _bgmClip;         // Sound/bgm/Untitled.mp3, loops across scenes
+        [SerializeField] protected AudioClip _sfxStoneImpact;  // Sound/SFX/stone_impact.wav
+        [SerializeField] protected AudioClip _sfxBuffLand;     // Sound/SFX/get_stats.wav
+        [SerializeField] protected AudioClip _sfxHit;          // Sound/SFX/hitted.wav
+        protected const float StoneImpactGain = 0.55f;
+        protected const float BuffLandGain = 0.65f;
+        protected const float HitGain = 0.40f;
+
         private void BuildBackground()
         {
             if (_backgroundSprite == null)
@@ -209,6 +221,7 @@ namespace Puckmite.View
                 {
                     Destroy(f.Go);
                     _iconFlights.RemoveAt(i);
+                    GameAudio.PlaySfx(_sfxBuffLand, BuffLandGain); // every landing ticks (사용자 사운드)
                     f.OnLand?.Invoke();
                     continue;
                 }
@@ -225,6 +238,255 @@ namespace Puckmite.View
             }
 
             return _iconFlights.Count > 0;
+        }
+
+        // --- ESC menu (사용자 지정 2026-08-10) -------------------------------------------------------
+
+        // The pause menu over either arena scene, in the difficulty picker's dress (gold frame, dark
+        // panel, gold heading, btn_close X): the X resumes, two sliders drive the persisted volumes,
+        // and the bottom button leaves for the title. Opening freezes the whole game (timeScale 0).
+        [SerializeField] protected Sprite _menuCloseSprite; // btn_close, shared with the picker
+        protected bool _pauseMenuOpen;
+        private static readonly Vector2 PausePanelCenter = new Vector2(0f, 6.25f); // the camera's centre
+        private static readonly Vector2 PausePanelSize = new Vector2(21.5f, 15f);
+        private static readonly Vector2 PauseButtonSize = new Vector2(17.6f, 3.4f);
+        private const float PauseSliderY0 = 2.6f;      // SFX row (panel-local)
+        private const float PauseSliderY1 = -0.9f;     // BGM row
+        private const float PauseButtonY = -4.9f;      // 메인메뉴로 가기
+        private const float PauseSliderMinX = -3.2f;   // bar span (panel-local)
+        private const float PauseSliderMaxX = 8.0f;
+        private static readonly Color PauseOutlineTint = new Color(1f, 0.9f, 0.25f, 0.9f);
+        private GameObject _pauseRoot;
+        private SpriteRenderer _pauseCloseBg;
+        private SpriteRenderer _pauseCloseOutline;
+        private SpriteRenderer _pauseMenuBg;
+        private SpriteRenderer _pauseMenuOutline;
+        private readonly SpriteRenderer[] _pauseSliderFill = new SpriteRenderer[2];
+        private readonly SpriteRenderer[] _pauseSliderKnob = new SpriteRenderer[2];
+        private int _draggingSlider = -1;
+
+        // Scenes that own a modal (the shop's buying screen) veto the ESC toggle while it is up, so ESC
+        // keeps closing the modal first.
+        protected virtual bool PauseMenuBlocked()
+        {
+            return false;
+        }
+
+        // Leaving for the title is scene code (the base stays out of Puckmite.Game) — both arenas
+        // implement it with the same one-liner.
+        protected abstract void OnPauseMainMenu();
+
+        protected void UpdatePauseMenu()
+        {
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && !PauseMenuBlocked())
+            {
+                SetPauseMenuOpen(!_pauseMenuOpen);
+            }
+
+            if (!_pauseMenuOpen)
+            {
+                return;
+            }
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            Vector2 world = ScreenToWorld(mouse.position.ReadValue());
+            Vector2 local = world - PausePanelCenter;
+            bool pressed = mouse.leftButton.wasPressedThisFrame;
+
+            // The X (resume) and the main-menu button, with the usual hover outlines.
+            bool hoverClose = _pauseCloseBg != null && ContainsWorld(_pauseCloseBg.bounds, world);
+            _pauseCloseOutline.enabled = hoverClose;
+            bool hoverMenu = Mathf.Abs(local.x) <= PauseButtonSize.x * 0.5f
+                && Mathf.Abs(local.y - PauseButtonY) <= PauseButtonSize.y * 0.5f;
+            _pauseMenuOutline.enabled = hoverMenu;
+
+            if (pressed && hoverClose)
+            {
+                SetPauseMenuOpen(false);
+                return;
+            }
+
+            if (pressed && hoverMenu)
+            {
+                SetPauseMenuOpen(false); // restores timeScale before the scene goes
+                GameAudio.StopBgm();     // the title stays silent
+                OnPauseMainMenu();
+                return;
+            }
+
+            // The sliders: press anywhere on a bar to jump-and-drag; release lets go. The SFX bar plays
+            // the impact clip on release so the level can be judged by ear.
+            if (pressed)
+            {
+                for (int i = 0; i < 2; i++)
+                {
+                    float rowY = i == 0 ? PauseSliderY0 : PauseSliderY1;
+                    if (local.x >= PauseSliderMinX - 0.5f && local.x <= PauseSliderMaxX + 0.5f
+                        && Mathf.Abs(local.y - rowY) <= 0.9f)
+                    {
+                        _draggingSlider = i;
+                    }
+                }
+            }
+
+            if (_draggingSlider >= 0)
+            {
+                float value = Mathf.Clamp01((local.x - PauseSliderMinX) / (PauseSliderMaxX - PauseSliderMinX));
+                if (_draggingSlider == 0)
+                {
+                    GameAudio.SfxVolume = value;
+                }
+                else
+                {
+                    GameAudio.BgmVolume = value; // audible immediately
+                }
+
+                if (mouse.leftButton.wasReleasedThisFrame)
+                {
+                    if (_draggingSlider == 0)
+                    {
+                        GameAudio.PlaySfx(_sfxStoneImpact, StoneImpactGain);
+                    }
+
+                    _draggingSlider = -1;
+                }
+            }
+
+            UpdatePauseSliderVisuals();
+        }
+
+        private void SetPauseMenuOpen(bool open)
+        {
+            if (open && _pauseRoot == null)
+            {
+                BuildPauseMenu();
+            }
+
+            _pauseMenuOpen = open;
+            _draggingSlider = -1;
+            if (_pauseRoot != null)
+            {
+                _pauseRoot.SetActive(open);
+            }
+
+            Time.timeScale = open ? 0f : 1f; // the whole game holds its breath under the menu
+            if (open)
+            {
+                UpdatePauseSliderVisuals();
+            }
+        }
+
+        private void BuildPauseMenu()
+        {
+            _pauseRoot = new GameObject("PauseMenu");
+            _pauseRoot.transform.SetParent(transform, false);
+            _pauseRoot.transform.localPosition = PausePanelCenter;
+
+            // The difficulty picker's dress: thin gold frame with the dark box inset over it.
+            MakePauseRect("Frame", null, Vector2.zero, PausePanelSize + new Vector2(0.3f, 0.3f),
+                new Color(0.72f, 0.55f, 0.22f), 40);
+            MakePauseRect("PanelBg", null, Vector2.zero, PausePanelSize, new Color(0.08f, 0.10f, 0.15f, 0.97f), 41);
+
+            TextMeshPro heading = MakePauseText("Heading", "메뉴",
+                new Vector2(0f, PausePanelSize.y * 0.5f - 1.7f), new Vector2(12f, 2.2f), 8f);
+            heading.color = new Color(1f, 0.85f, 0.35f);
+
+            Vector2 closePos = new Vector2(PausePanelSize.x * 0.5f - 1.6f, PausePanelSize.y * 0.5f - 1.6f);
+            _pauseCloseOutline = MakePauseRect("CloseOutline", null, closePos, new Vector2(3.0f, 3.0f), PauseOutlineTint, 42);
+            _pauseCloseOutline.enabled = false;
+            _pauseCloseBg = MakePauseRect("CloseBg", _menuCloseSprite, closePos, new Vector2(2.6f, 2.6f),
+                _menuCloseSprite != null ? Color.white : new Color(0.62f, 0.18f, 0.22f), 43);
+
+            for (int i = 0; i < 2; i++)
+            {
+                float rowY = i == 0 ? PauseSliderY0 : PauseSliderY1;
+                MakePauseText(i == 0 ? "SfxLabel" : "BgmLabel", i == 0 ? "SFX" : "BGM",
+                    new Vector2(-7.2f, rowY), new Vector2(5f, 1.6f), 7f);
+                MakePauseRect(i == 0 ? "SfxBar" : "BgmBar", null,
+                    new Vector2((PauseSliderMinX + PauseSliderMaxX) * 0.5f, rowY),
+                    new Vector2(PauseSliderMaxX - PauseSliderMinX, 0.5f), new Color(0.22f, 0.26f, 0.34f), 42);
+                _pauseSliderFill[i] = MakePauseRect(i == 0 ? "SfxFill" : "BgmFill", null,
+                    new Vector2(PauseSliderMinX, rowY), new Vector2(1f, 0.5f), new Color(1f, 0.85f, 0.35f), 43);
+                _pauseSliderKnob[i] = MakePauseRect(i == 0 ? "SfxKnob" : "BgmKnob", null,
+                    new Vector2(PauseSliderMinX, rowY), new Vector2(0.9f, 1.3f), new Color(0.9f, 0.9f, 0.95f), 44);
+            }
+
+            _pauseMenuOutline = MakePauseRect("MainMenuOutline", null, new Vector2(0f, PauseButtonY),
+                PauseButtonSize + new Vector2(0.4f, 0.4f), PauseOutlineTint, 42);
+            _pauseMenuOutline.enabled = false;
+            _pauseMenuBg = MakePauseRect("MainMenuBg", null, new Vector2(0f, PauseButtonY), PauseButtonSize,
+                new Color(0.28f, 0.33f, 0.44f, 1f), 43);
+            MakePauseText("MainMenuLabel", "메인메뉴로 가기", new Vector2(0f, PauseButtonY), new Vector2(16f, 2.6f), 7f);
+        }
+
+        private void UpdatePauseSliderVisuals()
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                if (_pauseSliderFill[i] == null)
+                {
+                    continue;
+                }
+
+                float value = i == 0 ? GameAudio.SfxVolume : GameAudio.BgmVolume;
+                float rowY = i == 0 ? PauseSliderY0 : PauseSliderY1;
+                float width = Mathf.Max(0.05f, (PauseSliderMaxX - PauseSliderMinX) * value);
+                _pauseSliderFill[i].transform.localScale = new Vector3(width, 0.5f, 1f);
+                _pauseSliderFill[i].transform.localPosition = new Vector3(PauseSliderMinX + width * 0.5f, rowY, 0f);
+                _pauseSliderKnob[i].transform.localPosition = new Vector3(
+                    PauseSliderMinX + (PauseSliderMaxX - PauseSliderMinX) * value, rowY, 0f);
+            }
+        }
+
+        // The title picker's rect helper, panel-local: unit quad or art, scaled into the box.
+        private SpriteRenderer MakePauseRect(string name, Sprite art, Vector2 pos, Vector2 size, Color tint, int order)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(_pauseRoot.transform, false);
+
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sortingOrder = order;
+            sr.color = tint;
+            sr.sprite = art != null ? art : ProceduralSprites.Unit();
+            Bounds b = sr.sprite.bounds;
+            Vector3 scale = new Vector3(size.x / b.size.x, size.y / b.size.y, 1f);
+            go.transform.localScale = scale;
+            go.transform.localPosition = new Vector3(pos.x - b.center.x * scale.x, pos.y - b.center.y * scale.y, 0f);
+            return sr;
+        }
+
+        private TextMeshPro MakePauseText(string name, string text, Vector2 pos, Vector2 box, float maxSize)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(_pauseRoot.transform, false);
+            go.transform.localPosition = pos;
+
+            TextMeshPro tmp = go.AddComponent<TextMeshPro>();
+            if (KoreanFont.Asset() != null)
+            {
+                tmp.font = KoreanFont.Asset();
+            }
+
+            tmp.text = text;
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 1f;
+            tmp.fontSizeMax = maxSize;
+            tmp.rectTransform.sizeDelta = box;
+            tmp.color = Color.white;
+            tmp.GetComponent<MeshRenderer>().sortingOrder = 45;
+            return tmp;
+        }
+
+        private static bool ContainsWorld(Bounds b, Vector2 world)
+        {
+            return world.x >= b.min.x && world.x <= b.max.x && world.y >= b.min.y && world.y <= b.max.y;
         }
 
         // A labelled info box for the corner UI (dark placeholder rect + Korean-capable TMP), shared by
@@ -385,6 +647,8 @@ namespace Puckmite.View
                 return;
             }
 
+            Time.timeScale = 1f; // a scene left through the paused ESC menu must not stay frozen
+            GameAudio.PlayBgm(_bgmClip);
             Build();
         }
 
@@ -400,6 +664,7 @@ namespace Puckmite.View
 
             RebuildIfPhysicsChanged();
             ApplyHealthChangeIfNeeded();
+            UpdatePauseMenu();
         }
 
         // Builds (or rebuilds) everything this component owns. Destroys any children a previous build left
@@ -531,6 +796,7 @@ namespace Puckmite.View
             }
 
             int steps = 0;
+            bool collided = false;
             while (_accumulator >= PuckSim.Dt && steps < MaxStepsPerFrame)
             {
                 IReadOnlyList<PuckSimEvent> events = _sim.Step();
@@ -539,10 +805,12 @@ namespace Puckmite.View
                     if (events[i].Type == PuckSimEventType.WallBounce)
                     {
                         _wallBounceTotal++;
+                        collided = true; // wall bounces thud too (사용자 지정 2026-08-10)
                     }
                     else if (events[i].Type == PuckSimEventType.PuckCollision)
                     {
                         _collisionTotal++;
+                        collided = true;
                     }
                     else if (events[i].Type == PuckSimEventType.PuckDestroyed)
                     {
@@ -553,6 +821,13 @@ namespace Puckmite.View
 
                 _accumulator -= PuckSim.Dt;
                 steps++;
+            }
+
+            // One impact sound per frame at most — a multi-collision frame would otherwise stack the
+            // same clip into a crackle (사용자 사운드 2026-08-10).
+            if (collided)
+            {
+                GameAudio.PlaySfx(_sfxStoneImpact, StoneImpactGain);
             }
         }
 

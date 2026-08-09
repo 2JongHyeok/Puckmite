@@ -267,6 +267,11 @@ MonoBehaviour:
   _cellRunHealSprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellDamageSprite: {fileID: -928380179603270380, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellEmptySprite: {fileID: -3083967269285103066, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _bgmClip: {fileID: 8300000, guid: 95b03139689a5f1459588fcb814d9487, type: 3}
+  _sfxStoneImpact: {fileID: 8300000, guid: 888a86f06235a82488a1bcf0749f5564, type: 3}
+  _sfxBuffLand: {fileID: 8300000, guid: 57a463cfb8d87034cb42e5502500c33c, type: 3}
+  _sfxHit: {fileID: 8300000, guid: dd7732743d1b3f345b6bcfe02e37d68f, type: 3}
+  _menuCloseSprite: {fileID: 2262697476317888842, guid: b97806987a418064f93dfe24d246770c, type: 3}
   _silhouetteMaterial: {fileID: 2100000, guid: 6734f8c9197b44641b2c935695892126, type: 2}
   _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
   _basicEnemyPrefab: {fileID: -2253911629886400664, guid: f125c0d64dc242048a6a8c2f2e319e87, type: 3}

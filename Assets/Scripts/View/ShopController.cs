@@ -260,6 +260,19 @@ namespace Puckmite.View
 
         // --- Shop flow ----------------------------------------------------------------------------
 
+        // The shop's own modals eat ESC first (the buying screen closes on it), so the pause menu only
+        // toggles while nothing else owns the key.
+        protected override bool PauseMenuBlocked()
+        {
+            return _merchantOpen || _confirmReplaceOpen;
+        }
+
+        // The ESC menu's bottom button (사용자 지정 2026-08-10).
+        protected override void OnPauseMainMenu()
+        {
+            GameFlow.LoadTitle();
+        }
+
         // Leaving settles the board as it stands: whatever the stones are sitting on is what gets bought
         // into the player's stats for good (design doc 5.2/5.5). The campaign lands in full right here —
         // the icon flight that follows is display only (사용자 지정 2026-08-10), so a reload mid-flight
@@ -1164,8 +1177,8 @@ namespace Puckmite.View
 
             _stoneCountText.text = "x " + _shopStonesLeft;
 
-            // The leave flight freezes the column: no hovers, no clicks, no second settlement.
-            if (_leaving)
+            // The leave flight and the ESC menu freeze the column: no hovers, no clicks.
+            if (_leaving || _pauseMenuOpen)
             {
                 _rollOutline.enabled = false;
                 _buyOutline.enabled = false;
@@ -1385,7 +1398,7 @@ namespace Puckmite.View
             _launchReady = false;
 
             Mouse mouse = Mouse.current;
-            if (mouse == null || _merchantOpen || _confirmReplaceOpen || _leaving)
+            if (mouse == null || _merchantOpen || _confirmReplaceOpen || _leaving || _pauseMenuOpen)
             {
                 return; // the modals block clicks through them; the leave flight locks the board entirely
             }

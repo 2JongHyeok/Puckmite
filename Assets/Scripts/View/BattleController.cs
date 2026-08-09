@@ -558,7 +558,7 @@ namespace Puckmite.View
 
             // An enemy turn drives itself: after a short think pause, search for the best shot on a
             // background task (frames — and the idle animations — keep running), then fire the result.
-            if (!_gameOver && _tuning.EnemyAiEnabled && _currentActor != 0 && !_actorDead[_currentActor]
+            if (!_gameOver && !_pauseMenuOpen && _tuning.EnemyAiEnabled && _currentActor != 0 && !_actorDead[_currentActor]
                 && !_hasRolledThisTurn && !_noStoneTurn && !_awaitingAttack && !_buffFlightActive && _sim.AllAtRest())
             {
                 if (_planTask == null)
@@ -758,9 +758,9 @@ namespace Puckmite.View
             _launchReady = false;   // recomputed below while aiming
 
             Mouse mouse = Mouse.current;
-            if (mouse == null)
+            if (mouse == null || _pauseMenuOpen)
             {
-                return;
+                return; // the ESC menu owns the pointer while it is up
             }
 
             Vector2 screen = mouse.position.ReadValue();
@@ -1057,6 +1057,12 @@ namespace Puckmite.View
             GameFlow.LoadBattle();
         }
 
+        // The ESC menu's bottom button (사용자 지정 2026-08-10).
+        protected override void OnPauseMainMenu()
+        {
+            GameFlow.LoadTitle();
+        }
+
         // Gathers everything the enemy search needs — own stone ids, entry candidates, weights, config —
         // and starts it on a background task. Everything handed to the task is a private copy (the board
         // is a Clone, the lists are copied, the snipe priority too), so the search reads nothing this
@@ -1298,6 +1304,11 @@ namespace Puckmite.View
                 int healed = Mathf.Min(-damage, BaseHealth(target) - _actorHealth[target]);
                 _actorHealth[target] += healed;
                 return;
+            }
+
+            if (damage > 0)
+            {
+                GameAudio.PlaySfx(_sfxHit, HitGain); // 맞았다 — absorbed or not (사용자 사운드 2026-08-10)
             }
 
             int fromEffect = Mathf.Min(_actorEffectShield[target], damage);
@@ -2493,8 +2504,8 @@ namespace Puckmite.View
                 return;
             }
 
-            bool available = !_gameOver && _currentActor == 0 && !_hasRolledThisTurn && !_noStoneTurn
-                && !_awaitingAttack && !_buffFlightActive && !_aiming && _sim.AllAtRest()
+            bool available = !_gameOver && !_pauseMenuOpen && _currentActor == 0 && !_hasRolledThisTurn
+                && !_noStoneTurn && !_awaitingAttack && !_buffFlightActive && !_aiming && _sim.AllAtRest()
                 && (_victoryPanel == null || !_victoryPanel.IsShown);
 
             Color bg = _skipUsesArt ? Color.white : new Color(0.14f, 0.17f, 0.24f, 0.9f);

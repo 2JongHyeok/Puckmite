@@ -135,6 +135,14 @@ namespace Puckmite.EditorTools
                 SetReference(controller, "_silhouetteMaterial", silhouette);
             }
 
+            // The game's sounds (사용자 사운드 2026-08-10): the BGM loops across both arena scenes, the
+            // three SFX play from the shared hooks. The ESC menu reuses the picker's X art.
+            WireAudioClip(controller, "_bgmClip", "Assets/Sound/bgm/Untitled.mp3");
+            WireAudioClip(controller, "_sfxStoneImpact", "Assets/Sound/SFX/stone_impact.wav");
+            WireAudioClip(controller, "_sfxBuffLand", "Assets/Sound/SFX/get_stats.wav");
+            WireAudioClip(controller, "_sfxHit", "Assets/Sound/SFX/hitted.wav");
+            SetOptionalSprite(controller, "_menuCloseSprite", "Assets/Art/Sprites/UI/btn_close");
+
             // Battle only: the hero art prefab for the player's character-row slot. Missing art is not
             // fatal — the controller falls back to its placeholder circle — so this only warns.
             if (controller is BattleController)
@@ -326,6 +334,20 @@ namespace Puckmite.EditorTools
             }
 
             EditorSceneManager.SaveScene(scene, TitlePath);
+        }
+
+        // One sound slot. The files exist (사용자 사운드 2026-08-10), so a miss is worth a warning —
+        // that sound would silently never play.
+        private static void WireAudioClip(Object controller, string field, string path)
+        {
+            AudioClip clip = AssetDatabase.LoadAssetAtPath<AudioClip>(path);
+            if (clip == null)
+            {
+                Debug.LogWarning($"[PuckHero] {path} not found — that sound stays silent.");
+                return;
+            }
+
+            SetReference(controller, field, clip);
         }
 
         // One enemy kind's art prefab. The art exists for every kind in the spawn pool, so a missing
