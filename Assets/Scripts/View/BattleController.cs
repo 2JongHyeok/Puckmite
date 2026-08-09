@@ -75,6 +75,8 @@ namespace Puckmite.View
         [SerializeField] private GameObject _hardStonePrefab;  // oak
         [SerializeField] private GameObject _bomberPrefab;     // oak2
         [SerializeField] private GameObject _anchorPrefab;     // pig2
+        [SerializeField] private GameObject _boss1Prefab;      // boss1 — the stage-1 boss (사용자 아트 2026-08-10)
+        [SerializeField] private GameObject _boss2Prefab;      // boss2 — the stage-2 boss
 
         // Optional art slots, wired by Tools/PuckHero/Setup Game Scenes from promised paths under
         // Assets/Art/Sprites/UI/ (StatHealth·StatShield·StatAttack·StatStones; .png or .aseprite).
@@ -1694,11 +1696,11 @@ namespace Puckmite.View
                 root.transform.SetParent(transform, false);
 
                 // Body first: art bodies and the placeholder circle stand on the same feet line but
-                // differ in height, and the ring and hit disc follow whichever body was built. Bosses
-                // keep the circle — they roll as Basic but are not slimes; their art is TBD.
+                // differ in height, and the ring and hit disc follow whichever body was built. A boss
+                // wears its stage's own art (boss1/boss2), not its rolled kind's.
                 SpriteRenderer body = actor == 0
                     ? TryBuildHeroBody(root.transform, x)
-                    : Campaign.IsBossRun ? null : TryBuildEnemyBody(root.transform, x, _actorTypes[actor]);
+                    : Campaign.IsBossRun ? TryBuildBossBody(root.transform, x) : TryBuildEnemyBody(root.transform, x, _actorTypes[actor]);
                 if (body != null)
                 {
                     _bodyUsesArt[actor] = true;
@@ -1775,7 +1777,17 @@ namespace Puckmite.View
         // has no art wired, and the caller falls back to the circle.
         private SpriteRenderer TryBuildEnemyBody(Transform parent, float x, EnemyType type)
         {
-            GameObject prefab = EnemyPrefabFor(type);
+            return TryBuildBodyPrefab(EnemyPrefabFor(type), parent, x, type.ToString());
+        }
+
+        // The boss wears its stage's art (design doc 4.4: boss1/boss2 — 사용자 아트 2026-08-10).
+        private SpriteRenderer TryBuildBossBody(Transform parent, float x)
+        {
+            return TryBuildBodyPrefab(Campaign.Stage == 1 ? _boss1Prefab : _boss2Prefab, parent, x, "Boss");
+        }
+
+        private SpriteRenderer TryBuildBodyPrefab(GameObject prefab, Transform parent, float x, string label)
+        {
             if (prefab == null)
             {
                 return null;
@@ -1787,7 +1799,7 @@ namespace Puckmite.View
             SpriteRenderer sr = go.GetComponentInChildren<SpriteRenderer>();
             if (sr == null || sr.sprite == null)
             {
-                Debug.LogError($"[PuckHero] Enemy prefab for {type} has no usable SpriteRenderer — using the placeholder circle.");
+                Debug.LogError($"[PuckHero] Body prefab for {label} has no usable SpriteRenderer — using the placeholder circle.");
                 Destroy(go);
                 return null;
             }

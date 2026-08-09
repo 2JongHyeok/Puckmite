@@ -276,6 +276,8 @@ MonoBehaviour:
   _hardStonePrefab: {fileID: -2253911629886400664, guid: 94fc6f33134aa824083b1bac47871668, type: 3}
   _bomberPrefab: {fileID: -2253911629886400664, guid: 81e32797cfda02f418c6b76e18c10686, type: 3}
   _anchorPrefab: {fileID: -2253911629886400664, guid: 7835ac373ff659e4b9ab7b04f30a3375, type: 3}
+  _boss1Prefab: {fileID: -2253911629886400664, guid: 0ea057ceac830f54d99c48c86890b40b, type: 3}
+  _boss2Prefab: {fileID: -2253911629886400664, guid: 3690199ac93bdf5479e02d97382ceb7d, type: 3}
   _healthIconSprite: {fileID: 7172269534363851296, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _shieldIconSprite: {fileID: -6791987299007039944, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _attackIconSprite: {fileID: 3994866376848337748, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}

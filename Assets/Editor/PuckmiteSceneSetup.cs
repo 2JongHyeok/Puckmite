@@ -157,6 +157,8 @@ namespace Puckmite.EditorTools
                 WireEnemyPrefab(controller, "_hardStonePrefab", "oak");
                 WireEnemyPrefab(controller, "_bomberPrefab", "oak2");
                 WireEnemyPrefab(controller, "_anchorPrefab", "pig2");
+                WireEnemyPrefab(controller, "_boss1Prefab", "boss1"); // stage bosses (사용자 아트 2026-08-10)
+                WireEnemyPrefab(controller, "_boss2Prefab", "boss2");
 
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
