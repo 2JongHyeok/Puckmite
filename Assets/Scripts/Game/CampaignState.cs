@@ -10,14 +10,14 @@ namespace Puckmite.Game
     /// </summary>
     public sealed class CampaignState
     {
-        // Progression (design doc 2.1): 3 stages of 5 runs, enemy counts fixed per run and per stage.
-        // Stage 1 was softened to 1/1/1/2/boss when the enemy types arrived (사용자 지정, design doc 4.3).
-        public const int StageCount = 3;
+        // Progression: 2 stages of 5 runs (사용자 지정 2026-08-09 — 3에서 축소, 2스테이지 보스가 마지막),
+        // enemy counts fixed per run and per stage. Stage 1 was softened to 1/1/1/2/boss when the enemy
+        // types arrived (사용자 지정, design doc 4.3).
+        public const int StageCount = 2;
         public const int RunsPerStage = 5;
         private static readonly int[][] StageRunEnemyCounts =
         {
             new[] { 1, 1, 1, 2, 1 },
-            new[] { 1, 1, 2, 3, 1 },
             new[] { 1, 1, 2, 3, 1 },
         };
 
