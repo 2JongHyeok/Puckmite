@@ -18,6 +18,8 @@ namespace Puckmite.View
         private static readonly Color EmptyShopCellColor = new Color(0.19f, 0.20f, 0.24f);
         private const float MerchantX = -17.5f;
         private const float MerchantRadius = 2.2f;
+        // Standing on the backdrop's grass line, by the campfire (user mock 2026-08-09).
+        private const float MerchantY = CharFeetY + MerchantRadius;
 
         // The upgrade board: no damage cells and no fixed layout — every cell starts blank and is coloured by
         // whatever the player has bought onto it (design doc 5.1). Cell quads are kept so UpdateShopCells can
@@ -389,11 +391,11 @@ namespace Puckmite.View
             MakeQuad("WallLeft", board, new Vector2(-BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
             MakeQuad("WallRight", board, new Vector2(BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
 
-            // The merchant stands to the left of the board; clicking opens the buying screen.
+            // The merchant stands by the campfire, left of the board; clicking opens the buying screen.
             GameObject merchantGo = new GameObject("Merchant");
             merchantGo.transform.SetParent(transform, false);
             float d = MerchantRadius * 2f;
-            merchantGo.transform.localPosition = new Vector3(MerchantX, 0f, 0f);
+            merchantGo.transform.localPosition = new Vector3(MerchantX, MerchantY, 0f);
             merchantGo.transform.localScale = new Vector3(d, d, 1f);
             _merchantView = merchantGo.AddComponent<SpriteRenderer>();
             _merchantView.sprite = ProceduralSprites.Circle();
@@ -407,6 +409,8 @@ namespace Puckmite.View
             _pendingCellGhost.sprite = ProceduralSprites.Unit();
             _pendingCellGhost.sortingOrder = 4;
             _pendingCellGhost.enabled = false;
+
+            MakeInfoBox("ShopBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = "상점";
         }
 
         // Every shop stone starts in hand and comes in off the bottom wall.
@@ -526,7 +530,7 @@ namespace Puckmite.View
             }
 
             if (mouse.leftButton.wasPressedThisFrame && !overGui && !_shopThrowing
-                && (world - new Vector2(MerchantX, 0f)).magnitude <= MerchantRadius)
+                && (world - new Vector2(MerchantX, MerchantY)).magnitude <= MerchantRadius)
             {
                 _merchantOpen = true;
                 return;

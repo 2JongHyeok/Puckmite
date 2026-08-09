@@ -258,6 +258,7 @@ MonoBehaviour:
   _tuning: {fileID: 11400000, guid: dba168e68fa84464d81f3c3288574921, type: 2}
   _previewDashSprite: {fileID: 0}
   _previewHitGhostSprite: {fileID: 0}
+  _backgroundSprite: {fileID: 21300000, guid: b66627897ddef5d458e65a4669388bc8, type: 3}
   _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
   _basicEnemyPrefab: {fileID: -2253911629886400664, guid: f125c0d64dc242048a6a8c2f2e319e87, type: 3}
   _strikerPrefab: {fileID: -2253911629886400664, guid: 887a01ef10569874c8b675c30cf6986a, type: 3}
@@ -266,7 +267,6 @@ MonoBehaviour:
   _hardStonePrefab: {fileID: -2253911629886400664, guid: 94fc6f33134aa824083b1bac47871668, type: 3}
   _bomberPrefab: {fileID: -2253911629886400664, guid: 81e32797cfda02f418c6b76e18c10686, type: 3}
   _anchorPrefab: {fileID: -2253911629886400664, guid: 7835ac373ff659e4b9ab7b04f30a3375, type: 3}
-  _backgroundSprite: {fileID: 21300000, guid: b66627897ddef5d458e65a4669388bc8, type: 3}
   _healthIconSprite: {fileID: 7172269534363851296, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _shieldIconSprite: {fileID: -6791987299007039944, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _attackIconSprite: {fileID: 3994866376848337748, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}

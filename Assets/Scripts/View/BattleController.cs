@@ -19,7 +19,6 @@ namespace Puckmite.View
         // like the reference shot: everyone stands on one feet line floating just above the board (a ground
         // strip can be wired under it), and each actor's stat column stacks over its head. The columns
         // start above the tallest body (the hero art) so every column tops out level.
-        private const float CharFeetY = BoardHalf + 0.8f; // shared feet line, slightly above the board top
         private const float CharBodyHeight = 6.4f;   // hero art height; also sizes its ring and hit disc
         private const float CharBodyRadius = 1.6f;   // placeholder circle radius (art-less kinds only)
         private const float CharArtScale = 7.9f;     // world scale of character art: the hero's 81px ≈ CharBodyHeight,
@@ -78,9 +77,8 @@ namespace Puckmite.View
         [SerializeField] private GameObject _anchorPrefab;     // pig2
 
         // Optional art slots, wired by Tools/PuckHero/Setup Game Scenes from promised paths under
-        // Assets/Art/Sprites/ (UI/battle_background, UI/StatHealth·StatShield·StatAttack·StatStones;
-        // .png or .aseprite). Placeholders render until the files exist.
-        [SerializeField] private Sprite _backgroundSprite;
+        // Assets/Art/Sprites/UI/ (StatHealth·StatShield·StatAttack·StatStones; .png or .aseprite).
+        // Placeholders render until the files exist.
         [SerializeField] private Sprite _healthIconSprite;
         [SerializeField] private Sprite _shieldIconSprite;
         [SerializeField] private Sprite _attackIconSprite;
@@ -1648,8 +1646,6 @@ namespace Puckmite.View
 
             ResetCombatState();
 
-            BuildBackground();
-
             for (int actor = 0; actor < _actorCount; actor++)
             {
                 float x = CharacterX(actor);
@@ -1804,28 +1800,6 @@ namespace Puckmite.View
             new Color(0.95f, 0.60f, 0.20f),
             new Color(0.75f, 0.75f, 0.75f),
         };
-
-        // The battle backdrop: one full-view image (procedurally generated to the camera's 16:9 view —
-        // 720x405 at 10ppu = 72x40.5 world — with its grass line drawn exactly on the feet line and its
-        // centre soil left featureless where the board sits). Drawn behind every other renderer; wider
-        // aspects see the camera colour past its edges. Nothing is drawn until the sprite is wired.
-        private void BuildBackground()
-        {
-            if (_backgroundSprite == null)
-            {
-                return;
-            }
-
-            GameObject go = new GameObject("Background");
-            go.transform.SetParent(transform, false);
-
-            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = _backgroundSprite;
-            sr.sortingOrder = -20;
-
-            // Centre on the camera view (content spans -12.5..25 → centre y 6.25), by bounds as usual.
-            go.transform.position += new Vector3(0f, 6.25f, 0f) - sr.bounds.center;
-        }
 
         // One actor's stat column over its head: StatRowCount rows of [icon] [number]. Wired icon sprites
         // are fitted to the row height; a missing icon renders as a tinted square so the slot is visible.
@@ -2220,38 +2194,6 @@ namespace Puckmite.View
                 : $"스테이지 {Campaign.Stage}-{Campaign.Run}";
             MakeInfoBox("StageBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = stage;
             _turnText = MakeInfoBox("TurnBox", new Vector2(-19f, 1.5f), new Vector2(9f, 6f));
-        }
-
-        private TextMeshPro MakeInfoBox(string name, Vector2 center, Vector2 size)
-        {
-            GameObject go = new GameObject(name);
-            go.transform.SetParent(transform, false);
-            go.transform.localPosition = center;
-
-            GameObject bgGo = new GameObject("Bg");
-            bgGo.transform.SetParent(go.transform, false);
-            bgGo.transform.localScale = new Vector3(size.x, size.y, 1f);
-            SpriteRenderer bg = bgGo.AddComponent<SpriteRenderer>();
-            bg.sprite = ProceduralSprites.Unit();
-            bg.color = new Color(0.14f, 0.17f, 0.24f, 0.9f);
-            bg.sortingOrder = 15;
-
-            GameObject textGo = new GameObject("Text");
-            textGo.transform.SetParent(go.transform, false);
-            TextMeshPro tmp = textGo.AddComponent<TextMeshPro>();
-            if (KoreanFont.Asset() != null)
-            {
-                tmp.font = KoreanFont.Asset();
-            }
-
-            tmp.alignment = TextAlignmentOptions.Center;
-            tmp.enableAutoSizing = true;
-            tmp.fontSizeMin = 1f;
-            tmp.fontSizeMax = 8f;
-            tmp.rectTransform.sizeDelta = new Vector2(size.x - 0.8f, size.y - 0.6f);
-            tmp.color = Color.white;
-            tmp.GetComponent<MeshRenderer>().sortingOrder = 16;
-            return tmp;
         }
 
         // The enemy tooltip (사용자 지정): creature name and ability while the cursor rests on a living

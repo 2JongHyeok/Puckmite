@@ -34,6 +34,10 @@ namespace Puckmite.View
         private const float MaxAccumulated = 0.1f;   // clamp so a hitch cannot trigger a step burst
         private const int MaxStepsPerFrame = 4000;
 
+        // The shared feet line the backdrop's grass row is drawn on: battle characters and the shop
+        // merchant all stand here, slightly above the board's top wall.
+        protected const float CharFeetY = BoardHalf + 0.8f;
+
         // The camera frames content up to here (the battle's character row: bodies on the feet line plus
         // the stat columns over their heads). The shop keeps the same framing even without a row, so the
         // board sits identically in both scenes.
@@ -84,6 +88,64 @@ namespace Puckmite.View
         // Assets/Art/Sprites/UI/PreviewDash and /PreviewHitGhost). Procedural stand-ins until then.
         [SerializeField] private Sprite _previewDashSprite;
         [SerializeField] private Sprite _previewHitGhostSprite;
+
+        // Each scene's full-view backdrop, wired by Setup Game Scenes (battle_background /
+        // shop_background — procedurally generated to the camera's 16:9 view, 720x405 at 10ppu =
+        // 72x40.5 world, grass row on the feet line, the board rect left featureless). Nothing draws
+        // until it is wired; wider aspects see the camera colour past its edges.
+        [SerializeField] private Sprite _backgroundSprite;
+
+        private void BuildBackground()
+        {
+            if (_backgroundSprite == null)
+            {
+                return;
+            }
+
+            GameObject go = new GameObject("Background");
+            go.transform.SetParent(transform, false);
+
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = _backgroundSprite;
+            sr.sortingOrder = -20;
+
+            // Centre on the camera view (content spans -12.5..25 → centre y 6.25), by bounds as usual.
+            go.transform.position += new Vector3(0f, 6.25f, 0f) - sr.bounds.center;
+        }
+
+        // A labelled info box for the corner UI (dark placeholder rect + Korean-capable TMP), shared by
+        // the battle's stage/turn boxes and the shop's label.
+        protected TextMeshPro MakeInfoBox(string name, Vector2 center, Vector2 size)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = center;
+
+            GameObject bgGo = new GameObject("Bg");
+            bgGo.transform.SetParent(go.transform, false);
+            bgGo.transform.localScale = new Vector3(size.x, size.y, 1f);
+            SpriteRenderer bg = bgGo.AddComponent<SpriteRenderer>();
+            bg.sprite = ProceduralSprites.Unit();
+            bg.color = new Color(0.14f, 0.17f, 0.24f, 0.9f);
+            bg.sortingOrder = 15;
+
+            GameObject textGo = new GameObject("Text");
+            textGo.transform.SetParent(go.transform, false);
+            TextMeshPro tmp = textGo.AddComponent<TextMeshPro>();
+            if (KoreanFont.Asset() != null)
+            {
+                tmp.font = KoreanFont.Asset();
+            }
+
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 1f;
+            tmp.fontSizeMax = 8f;
+            tmp.rectTransform.sizeDelta = new Vector2(size.x - 0.8f, size.y - 0.6f);
+            tmp.color = Color.white;
+            tmp.GetComponent<MeshRenderer>().sortingOrder = 16;
+            return tmp;
+        }
 
         private float _accumulator;
         protected bool _aiming;
@@ -172,6 +234,7 @@ namespace Puckmite.View
             BuildSimFrom(new List<Puck>()); // the board starts empty; every stone enters from a hand
             AssignActors();
             BuildCamera();
+            BuildBackground();
             BuildMode();
         }
 

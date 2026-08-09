@@ -117,6 +117,11 @@ namespace Puckmite.EditorTools
             SetOptionalSprite(controller, "_previewDashSprite", "Assets/Art/Sprites/UI/PreviewDash");
             SetOptionalSprite(controller, "_previewHitGhostSprite", "Assets/Art/Sprites/UI/PreviewHitGhost");
 
+            // Each scene's full-view backdrop (procedurally generated PNGs; quiet until they exist).
+            SetOptionalSprite(controller, "_backgroundSprite", controller is BattleController
+                ? "Assets/Art/Sprites/UI/battle_background"
+                : "Assets/Art/Sprites/UI/shop_background");
+
             // Battle only: the hero art prefab for the player's character-row slot. Missing art is not
             // fatal — the controller falls back to its placeholder circle — so this only warns.
             if (controller is BattleController)
@@ -150,7 +155,6 @@ namespace Puckmite.EditorTools
 
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
-                SetOptionalSprite(controller, "_backgroundSprite", "Assets/Art/Sprites/UI/battle_background");
                 SetOptionalSprite(controller, "_victoryPanelSprite", "Assets/Art/Sprites/UI/VictoryPanel");
                 SetOptionalSprite(controller, "_victoryButtonSprite", "Assets/Art/Sprites/UI/VictoryButton");
                 SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/Gold");
