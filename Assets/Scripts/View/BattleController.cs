@@ -78,9 +78,9 @@ namespace Puckmite.View
         [SerializeField] private GameObject _anchorPrefab;     // pig2
 
         // Optional art slots, wired by Tools/PuckHero/Setup Game Scenes from promised paths under
-        // Assets/Art/Sprites/ (Environment/Ground, UI/StatHealth·StatShield·StatAttack·StatStones; .png
-        // or .aseprite). Placeholders render until the files exist.
-        [SerializeField] private Sprite _groundSprite;
+        // Assets/Art/Sprites/ (UI/battle_background, UI/StatHealth·StatShield·StatAttack·StatStones;
+        // .png or .aseprite). Placeholders render until the files exist.
+        [SerializeField] private Sprite _backgroundSprite;
         [SerializeField] private Sprite _healthIconSprite;
         [SerializeField] private Sprite _shieldIconSprite;
         [SerializeField] private Sprite _attackIconSprite;
@@ -1648,7 +1648,7 @@ namespace Puckmite.View
 
             ResetCombatState();
 
-            BuildGroundStrip();
+            BuildBackground();
 
             for (int actor = 0; actor < _actorCount; actor++)
             {
@@ -1805,25 +1805,26 @@ namespace Puckmite.View
             new Color(0.75f, 0.75f, 0.75f),
         };
 
-        // The ground strip the characters stand on (reference look, art only — no gameplay). Tiled across
-        // the board's full width so the image repeats instead of stretching; nothing is drawn until the
-        // sprite is wired.
-        private void BuildGroundStrip()
+        // The battle backdrop: one full-view image (procedurally generated to the camera's 16:9 view —
+        // 720x405 at 10ppu = 72x40.5 world — with its grass line drawn exactly on the feet line and its
+        // centre soil left featureless where the board sits). Drawn behind every other renderer; wider
+        // aspects see the camera colour past its edges. Nothing is drawn until the sprite is wired.
+        private void BuildBackground()
         {
-            if (_groundSprite == null)
+            if (_backgroundSprite == null)
             {
                 return;
             }
 
-            GameObject go = new GameObject("CharacterGround");
+            GameObject go = new GameObject("Background");
             go.transform.SetParent(transform, false);
-            go.transform.localPosition = new Vector3(0f, (BoardHalf + CharFeetY) * 0.5f, 0f);
 
             SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = _groundSprite;
-            sr.drawMode = SpriteDrawMode.Tiled;
-            sr.size = new Vector2(BoardHalf * 2f + 0.8f, CharFeetY - BoardHalf);
-            sr.sortingOrder = 5; // above the board walls (3), behind the rings and bodies (9, 10)
+            sr.sprite = _backgroundSprite;
+            sr.sortingOrder = -20;
+
+            // Centre on the camera view (content spans -12.5..25 → centre y 6.25), by bounds as usual.
+            go.transform.position += new Vector3(0f, 6.25f, 0f) - sr.bounds.center;
         }
 
         // One actor's stat column over its head: StatRowCount rows of [icon] [number]. Wired icon sprites
