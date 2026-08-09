@@ -10,15 +10,62 @@ namespace Puckmite.Game
     /// </summary>
     public sealed class CampaignState
     {
-        // Progression: 2 stages of 5 runs (사용자 지정 2026-08-09 — 3에서 축소, 2스테이지 보스가 마지막),
-        // enemy counts fixed per run and per stage. Stage 1 was softened to 1/1/1/2/boss when the enemy
-        // types arrived (사용자 지정, design doc 4.3).
+        // Progression: 2 stages of 5 runs (사용자 지정 2026-08-09 — 3에서 축소, 2스테이지 보스가 마지막).
         public const int StageCount = 2;
         public const int RunsPerStage = 5;
-        private static readonly int[][] StageRunEnemyCounts =
+
+        /// <summary>What a run spawns: the fixed tutorial slime, a random kind (1-2 draws without the
+        /// slime), or the stage's boss.</summary>
+        public enum RunMonsters
         {
-            new[] { 1, 1, 1, 2, 1 },
-            new[] { 1, 1, 2, 3, 1 },
+            Slime,
+            RandomExceptSlime,
+            Random,
+            Boss,
+        }
+
+        /// <summary>One row of the difficulty table: what spawns and how many, the stats every monster of
+        /// the run shares (kinds shift them view-side), and the stones each one fields.</summary>
+        public readonly struct RunSpec
+        {
+            public readonly RunMonsters Monsters;
+            public readonly int EnemyCount;
+            public readonly int EnemyHealth;
+            public readonly int EnemyShield;
+            public readonly int EnemyAttack;
+            public readonly int StonesPerEnemy;
+
+            public RunSpec(RunMonsters monsters, int enemyCount, int enemyHealth, int enemyShield,
+                int enemyAttack, int stonesPerEnemy)
+            {
+                Monsters = monsters;
+                EnemyCount = enemyCount;
+                EnemyHealth = enemyHealth;
+                EnemyShield = enemyShield;
+                EnemyAttack = enemyAttack;
+                StonesPerEnemy = stonesPerEnemy;
+            }
+        }
+
+        // The difficulty table (사용자 지정 2026-08-10): 몬스터 / 체력 / 쉴드 / 공격력 / 스톤 수 per run.
+        private static readonly RunSpec[][] StageRunSpecs =
+        {
+            new[]
+            {
+                new RunSpec(RunMonsters.Slime,             1,  20,  0, 1, 1), // 1-1
+                new RunSpec(RunMonsters.RandomExceptSlime, 1,  20,  0, 2, 1), // 1-2
+                new RunSpec(RunMonsters.Random,            2,  20,  0, 2, 1), // 1-3
+                new RunSpec(RunMonsters.Random,            3,  20,  0, 2, 1), // 1-4
+                new RunSpec(RunMonsters.Boss,              1,  50, 10, 5, 2), // 1-5
+            },
+            new[]
+            {
+                new RunSpec(RunMonsters.Random,            2,  20, 10, 3, 2), // 2-1
+                new RunSpec(RunMonsters.Random,            2,  20, 20, 3, 2), // 2-2
+                new RunSpec(RunMonsters.Random,            3,  20, 10, 3, 2), // 2-3
+                new RunSpec(RunMonsters.Random,            3,  30, 10, 4, 3), // 2-4
+                new RunSpec(RunMonsters.Boss,              1, 100, 30, 5, 4), // 2-5
+            },
         };
 
         public int Stage = 1;
@@ -45,7 +92,7 @@ namespace Puckmite.Game
 
         public bool IsBossRun => Run == RunsPerStage;
 
-        public int EnemyCountForRun
+        public RunSpec CurrentRunSpec
         {
             get
             {
@@ -54,25 +101,27 @@ namespace Puckmite.Game
                 {
                     stage = 0;
                 }
-                else if (stage >= StageRunEnemyCounts.Length)
+                else if (stage >= StageRunSpecs.Length)
                 {
-                    stage = StageRunEnemyCounts.Length - 1;
+                    stage = StageRunSpecs.Length - 1;
                 }
 
-                int[] counts = StageRunEnemyCounts[stage];
+                RunSpec[] specs = StageRunSpecs[stage];
                 int run = Run - 1;
                 if (run < 0)
                 {
                     run = 0;
                 }
-                else if (run >= counts.Length)
+                else if (run >= specs.Length)
                 {
-                    run = counts.Length - 1;
+                    run = specs.Length - 1;
                 }
 
-                return counts[run];
+                return specs[run];
             }
         }
+
+        public int EnemyCountForRun => CurrentRunSpec.EnemyCount;
 
         /// <summary>Moves to the next run (or the next stage); the healed total earned by clearing the last
         /// one becomes what the next starts from. Called when the shop is left (design doc 2.1).</summary>

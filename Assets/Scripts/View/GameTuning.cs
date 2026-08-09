@@ -23,18 +23,10 @@ namespace Puckmite.View
         public int StoneHealth = 3;              // base stone health, player and enemy alike (사용자 지정 2026-08)
         public int CellDamage = 1;               // damage-cell settlement amount (문서 미정, 임시)
 
-        [Header("Character stats — 사용자 지정 기준선 (2026-08), 최종은 16단계에서")]
-        public int PlayerBaseHealth = 50;
-        public int PlayerBaseAttack = 3;
+        [Header("Character stats — 사용자 지정 기준선 (2026-08-10); 적·보스 스탯은 CampaignState의 난이도 표")]
+        public int PlayerBaseHealth = 20;
+        public int PlayerBaseAttack = 1;
         public int PlayerBaseShield = 0;
-        public int EnemyBaseHealth = 10;
-        public int EnemyBaseAttack = 3;
-        public int EnemyBaseShield = 0;
-
-        [Header("Boss — stage 1 (사용자 지정 HP 100 / ATK 10; 최종은 16단계에서)")]
-        public int BossBaseHealth = 100;
-        public int BossBaseAttack = 10;
-        public int BossBaseShield = 0;
 
         [Header("Progression — 임시 (런 종료 회복량은 10.1에서 미정)")]
         public int RunEndHeal = 5;       // health restored after clearing a run (design doc 2.1)

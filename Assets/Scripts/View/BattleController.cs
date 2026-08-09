@@ -158,9 +158,10 @@ namespace Puckmite.View
         private const float EndScreenDelay = 1.5f;
         private float _endScreenTimer;
 
-        // Stage-1 boss: the board-warping caster. It rolls no stones; each of its turns casts one random
-        // ability instead, active until its next turn (StartTurn clears and re-casts). The dice are rolled
-        // HERE in the view — the sim only receives the outcome, so it stays deterministic.
+        // The boss (run 5 of either stage): the board-warping caster. Each of its turns casts one random
+        // ability, active until its next turn (StartTurn clears and re-casts), then rolls its stones like
+        // any enemy (사용자 지정 2026-08-10). The dice are rolled HERE in the view — the sim only receives
+        // the outcome, so it stays deterministic.
         private enum BossAbility
         {
             CorruptCells,
@@ -184,13 +185,10 @@ namespace Puckmite.View
 
         private static CampaignState Campaign => GameFlow.Campaign;
 
-        // Stage-1 boss (run 5 of stage 1). Stages 2-3 keep the ordinary-enemy placeholder until their own
-        // bosses are built.
-        private static bool IsStage1Boss => Campaign.IsBossRun && Campaign.Stage == 1;
-
-        // The seven enemy kinds plus the plain one (design doc 4.3). Stats and stone specs are the user's
-        // draft numbers, finalised in the balance pass (step 16); which kind appears where is rolled per
-        // run HERE in the view, so the sim stays deterministic.
+        // The seven enemy kinds plus the plain one (design doc 4.3). Character stats come from the
+        // campaign's difficulty table (사용자 지정 2026-08-10) with the striker/tank shifts below; which
+        // kind appears where is rolled per run HERE in the view, so the sim stays deterministic. Boss
+        // runs (run 5 of either stage) field the stage-1 caster kit with their table row's stats.
         private enum EnemyType
         {
             Basic,
@@ -208,29 +206,34 @@ namespace Puckmite.View
         private readonly List<int> _rosterActors = new List<int>(); // actor of each roster entry, filled by InitialRoster
         private readonly List<int> _snipePriority = new List<int>(); // reused per sniper plan
 
-        private int TypeBaseHealth(EnemyType type)
+        // Every monster of a run shares its table row's stats; the striker halves health and doubles
+        // attack, the tank the other way round (사용자 지정 2026-08-10). The other kinds' identity lives
+        // in their stones instead. The boss rolls as Basic, so its row applies unshifted.
+        private static int TypeBaseHealth(EnemyType type)
         {
+            int health = Campaign.CurrentRunSpec.EnemyHealth;
             switch (type)
             {
-                case EnemyType.Striker: return 5;  // 사용자 지정 HP 5 / ATK 5
-                case EnemyType.Tank: return 20;    // 사용자 지정 HP 20 / ATK 2
-                default: return _tuning.EnemyBaseHealth;
+                case EnemyType.Striker: return Halved(health);
+                case EnemyType.Tank: return health * 2;
+                default: return health;
             }
         }
 
-        private int TypeBaseAttack(EnemyType type)
+        private static int TypeBaseAttack(EnemyType type)
         {
+            int attack = Campaign.CurrentRunSpec.EnemyAttack;
             switch (type)
             {
-                case EnemyType.Striker: return 5;
-                case EnemyType.Tank: return 2;
-                default: return _tuning.EnemyBaseAttack;
+                case EnemyType.Striker: return attack * 2;
+                case EnemyType.Tank: return Halved(attack);
+                default: return attack;
             }
         }
 
-        private static int TypeStoneCount(EnemyType type)
+        private static int Halved(int value)
         {
-            return type == EnemyType.Twin ? 2 : 1;
+            return (value + 1) / 2; // -50% rounds half up and never drops below 1
         }
 
         private int TypeStoneHealth(EnemyType type)
@@ -291,9 +294,9 @@ namespace Puckmite.View
         }
 
         // Every stone in the current run, with the actor of each entry recorded in _rosterActors in
-        // lock-step (enemy kinds field different counts — the twin two, the stage-1 boss none — so the
-        // one-stone-per-enemy mapping of the base class no longer holds). Battle stones bought in shops
-        // add to the player's count until the campaign is lost (design doc 5.6).
+        // lock-step (stone counts vary per run row and kind, so the one-stone-per-enemy mapping of the
+        // base class no longer holds). Battle stones bought in shops add to the player's count until the
+        // campaign is lost (design doc 5.6).
         protected override List<Puck> InitialRoster()
         {
             List<Puck> roster = new List<Puck>();
@@ -306,23 +309,22 @@ namespace Puckmite.View
                 _rosterActors.Add(0);
             }
 
-            // The stage-1 boss fields no stones at all — its turns cast board-warping abilities instead.
-            if (!IsStage1Boss)
+            // Each enemy fields its table row's stone count, the twin one more (사용자 지정 2026-08-10).
+            // That includes the boss, which now rolls after casting.
+            int stonesPerEnemy = Campaign.CurrentRunSpec.StonesPerEnemy;
+            int enemies = Campaign.EnemyCountForRun;
+            for (int actor = 1; actor <= enemies; actor++)
             {
-                int enemies = Campaign.EnemyCountForRun;
-                for (int actor = 1; actor <= enemies; actor++)
+                EnemyType type = _actorTypes[actor];
+                int stones = stonesPerEnemy + (type == EnemyType.Twin ? 1 : 0);
+                for (int s = 0; s < stones; s++)
                 {
-                    EnemyType type = _actorTypes[actor];
-                    int stones = TypeStoneCount(type);
-                    for (int s = 0; s < stones; s++)
+                    roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Enemy)
                     {
-                        roster.Add(new Puck(roster.Count, Vector2.zero, _tuning.PuckRadius, 1f, PuckOwner.Enemy)
-                        {
-                            Health = TypeStoneHealth(type),
-                            Trait = TypeStoneTrait(type),
-                        });
-                        _rosterActors.Add(actor);
-                    }
+                        Health = TypeStoneHealth(type),
+                        Trait = TypeStoneTrait(type),
+                    });
+                    _rosterActors.Add(actor);
                 }
             }
 
@@ -346,9 +348,10 @@ namespace Puckmite.View
             _hasRolledThisTurn = false;
         }
 
-        // Which kind each enemy actor is this run (design doc 4.3): plain enemies until stage 1 run 3,
-        // the full pool from there on (사용자 지정). Boss runs stay out of the pool — stage 1 has its own
-        // boss, stages 2-3 keep the plain placeholder. Rolled once per Build; the dice live in the view.
+        // Which kind each enemy actor is this run (design doc 4.3), by the run's table row: 1-1 is the
+        // fixed slime, 1-2 draws without it, later rows draw the full pool. A boss run's kind is Basic —
+        // the row's stats apply unshifted and its stones carry no trait. Rolled once per Build; the dice
+        // live in the view.
         private void RollEnemyTypes()
         {
             int enemies = Campaign.EnemyCountForRun;
@@ -361,12 +364,8 @@ namespace Puckmite.View
 
         private EnemyType RollEnemyType(int enemiesThisRun)
         {
-            if (Campaign.IsBossRun)
-            {
-                return EnemyType.Basic;
-            }
-
-            if (Campaign.Stage == 1 && Campaign.Run < 3)
+            CampaignState.RunMonsters monsters = Campaign.CurrentRunSpec.Monsters;
+            if (monsters == CampaignState.RunMonsters.Slime || monsters == CampaignState.RunMonsters.Boss)
             {
                 return EnemyType.Basic;
             }
@@ -374,14 +373,16 @@ namespace Puckmite.View
             // 저격형 is out of the spawn pool (design doc 4.3, 사용자 결정 2026-08-08): a roll landing
             // on its slot takes Anchor — the one value the shortened range cannot reach — keeping the
             // draw uniform. 자폭형 is additionally never fielded alone (사용자 지정), so a single-enemy
-            // run also shortens the range past Bomber's slot.
+            // run also shortens the range past Bomber's slot. A no-slime draw starts past Basic instead
+            // (사용자 지정 2026-08-10).
+            int first = monsters == CampaignState.RunMonsters.RandomExceptSlime ? 1 : 0;
             int kinds = enemiesThisRun == 1 ? 6 : 7;
-            int roll = Random.Range(0, kinds);
+            int roll = Random.Range(first, kinds);
             return roll == (int)EnemyType.Sniper ? EnemyType.Anchor : (EnemyType)roll;
         }
 
-        // Player + this run's enemies — declared, not derived from stones, so the stoneless boss still
-        // gets its actor slot, its turn and its character widget.
+        // Player + this run's enemies — declared, not derived from stones, so an actor out of stones
+        // still keeps its slot, its turn and its character widget.
         protected override int DeclaredActorCount()
         {
             return 1 + Campaign.EnemyCountForRun;
@@ -570,16 +571,14 @@ namespace Puckmite.View
                     ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                     SettleCurrentActor();          // stones lost here go back to the hand as pending
 
-                    // The stage-1 boss rolls nothing: last round's board warp expires now ("until its next
-                    // turn"), a fresh ability is cast, and the no-stone beat carries the turn into its
-                    // forced attack.
-                    if (_currentActor != 0 && IsStage1Boss)
+                    // A boss turn (run 5 of either stage): last round's board warp expires now ("until
+                    // its next turn") and a fresh ability is cast — then it rolls like any enemy
+                    // (사용자 지정 2026-08-10). With nothing left to roll it takes the no-stone beat below
+                    // like everyone else.
+                    if (_currentActor != 0 && Campaign.IsBossRun)
                     {
                         ClearBossEffects();
                         CastBossAbility();
-                        _noStoneTurn = true;
-                        _noStoneTimer = _tuning.NoStoneTurnDelay;
-                        return;
                     }
 
                     // 자폭형 (design doc 4.3): its bomb flies only every second turn — on the off turns it
@@ -685,7 +684,6 @@ namespace Puckmite.View
 
             if (Campaign.IsBossRun)
             {
-                // Stage-1 boss is real; stages 2-3 still wear the label over ordinary stats.
                 return "Boss";
             }
 
@@ -889,7 +887,7 @@ namespace Puckmite.View
 
         // --- Enemy AI ------------------------------------------------------------------------------
 
-        // --- Stage-1 boss abilities -----------------------------------------------------------------
+        // --- Boss abilities -------------------------------------------------------------------------
 
         private void ClearBossEffects()
         {
@@ -1392,7 +1390,7 @@ namespace Puckmite.View
                 return _tuning.PlayerBaseHealth + Campaign.BonusMaxHealth;
             }
 
-            return IsStage1Boss ? _tuning.BossBaseHealth : TypeBaseHealth(_actorTypes[actor]);
+            return TypeBaseHealth(_actorTypes[actor]);
         }
 
         private int BaseAttack(int actor)
@@ -1402,7 +1400,7 @@ namespace Puckmite.View
                 return _tuning.PlayerBaseAttack + Campaign.BonusAttack;
             }
 
-            return IsStage1Boss ? _tuning.BossBaseAttack : TypeBaseAttack(_actorTypes[actor]);
+            return TypeBaseAttack(_actorTypes[actor]);
         }
 
         private int BaseShield(int actor)
@@ -1412,7 +1410,7 @@ namespace Puckmite.View
                 return _tuning.PlayerBaseShield + Campaign.BonusShield;
             }
 
-            return IsStage1Boss ? _tuning.BossBaseShield : _tuning.EnemyBaseShield;
+            return Campaign.CurrentRunSpec.EnemyShield; // no kind shift on shield (사용자 지정 2026-08-10)
         }
 
         private int RunEndHeal()
@@ -1696,11 +1694,11 @@ namespace Puckmite.View
                 root.transform.SetParent(transform, false);
 
                 // Body first: art bodies and the placeholder circle stand on the same feet line but
-                // differ in height, and the ring and hit disc follow whichever body was built. The
-                // stage-1 boss keeps the circle — it rolls as Basic but is not a slime; its art is TBD.
+                // differ in height, and the ring and hit disc follow whichever body was built. Bosses
+                // keep the circle — they roll as Basic but are not slimes; their art is TBD.
                 SpriteRenderer body = actor == 0
                     ? TryBuildHeroBody(root.transform, x)
-                    : IsStage1Boss ? null : TryBuildEnemyBody(root.transform, x, _actorTypes[actor]);
+                    : Campaign.IsBossRun ? null : TryBuildEnemyBody(root.transform, x, _actorTypes[actor]);
                 if (body != null)
                 {
                     _bodyUsesArt[actor] = true;
@@ -2294,10 +2292,10 @@ namespace Puckmite.View
             if (actor != _tooltipActor)
             {
                 _tooltipActor = actor;
-                bool boss = IsStage1Boss;
+                bool boss = Campaign.IsBossRun;
                 _tooltipTitle.text = boss ? "???" : TooltipName(_actorTypes[actor]);
                 _tooltipBody.text = boss
-                    ? "매 턴 보드를 바꾼다 — 칸 오염, 구멍, 전체 피해 중 하나."
+                    ? "매 턴 칸 오염·구멍·전체 피해 중 하나를 쓴 뒤 스톤을 굴린다."
                     : TooltipAbility(_actorTypes[actor]);
 
                 float x = CharacterX(actor) + _characterGrabRadius[actor] + TooltipWidth * 0.5f + 0.6f;

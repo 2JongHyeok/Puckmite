@@ -444,9 +444,10 @@ namespace Puckmite.EditorTools
         }
 
         // The tuning asset keeps its own values once created — code defaults only seed it. When the user
-        // re-baselines the numbers (2026-08: player 50/3, enemy 10/3, stone health 3), the asset has to be
+        // re-baselines the numbers (2026-08-10: player 20/1/0, stone health 3), the asset has to be
         // updated through the API (project rule: no hand-editing Unity YAML). Touches only these fields;
-        // every other slider tweak in the asset survives.
+        // every other slider tweak in the asset survives. Enemy and boss stats live in CampaignState's
+        // difficulty table (사용자 지정 2026-08-10), not here.
         [MenuItem("Tools/PuckHero/Apply Stat Baseline (2026-08)")]
         public static void ApplyStatBaseline()
         {
@@ -457,14 +458,13 @@ namespace Puckmite.EditorTools
                 return;
             }
 
-            tuning.PlayerBaseHealth = 50;
-            tuning.PlayerBaseAttack = 3;
-            tuning.EnemyBaseHealth = 10;
-            tuning.EnemyBaseAttack = 3;
+            tuning.PlayerBaseHealth = 20;
+            tuning.PlayerBaseAttack = 1;
+            tuning.PlayerBaseShield = 0; // catches slider leftovers too (2026-08-10: a stray 100 was found)
             tuning.StoneHealth = 3;
             EditorUtility.SetDirty(tuning);
             AssetDatabase.SaveAssets();
-            Debug.Log("[PuckHero] Stat baseline applied: player 50/3, enemy 10/3, stone health 3.");
+            Debug.Log("[PuckHero] Stat baseline applied: player 20/1/0, stone health 3.");
         }
 
         // One-time cleanup, run only after the new scenes are verified: AssetDatabase handles the .meta

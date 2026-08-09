@@ -23,15 +23,9 @@ MonoBehaviour:
   PuckRadius: 1.5
   StoneHealth: 3
   CellDamage: 1
-  PlayerBaseHealth: 50
-  PlayerBaseAttack: 3
-  PlayerBaseShield: 100
-  EnemyBaseHealth: 10
-  EnemyBaseAttack: 3
-  EnemyBaseShield: 0
-  BossBaseHealth: 100
-  BossBaseAttack: 10
-  BossBaseShield: 0
+  PlayerBaseHealth: 20
+  PlayerBaseAttack: 1
+  PlayerBaseShield: 0
   RunEndHeal: 5
   PlayerStoneCount: 2
   GoldPerKill: 100
