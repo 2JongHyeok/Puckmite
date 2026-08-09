@@ -470,6 +470,19 @@ namespace Puckmite.View
             }
         }
 
+        // The trait stones' faces from the stone_ui sheet (사용자 지정 2026-08-10: 자폭 노랑, 반석 회색).
+        // Sniper is out of the spawn pool and has no face — the tinted circle keeps its pink.
+        protected override Sprite StoneFaceSprite(Puck p)
+        {
+            switch (p.Trait)
+            {
+                case StoneTrait.Bomb: return _stoneBombSprite;
+                case StoneTrait.Anchor: return _stoneAnchorSprite;
+                case StoneTrait.Sniper: return null;
+                default: return base.StoneFaceSprite(p);
+            }
+        }
+
         // The entry edge: the player's new stones come in on the left, an enemy's on the right, hugging that
         // wall (design doc 3.4). The inset is the highlight ring's reach rather than the stone's radius, so
         // the ring is not cut off by the wall; it stays well inside PuckSim's wall clamp, so the stone does

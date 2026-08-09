@@ -126,6 +126,9 @@ namespace Puckmite.EditorTools
             // Both boards' cell faces, one frame per face from the cell sheet.
             WireCellSprites(controller);
 
+            // The stone faces and health rings (사용자 아트 2026-08-10).
+            WireStoneUi(controller);
+
             // The silhouette material both scenes' highlight outlines draw with (battle characters, shop
             // merchant), created next to its shader on first run. A real asset (not a runtime Material)
             // so the scene reference keeps the shader in builds.
@@ -337,6 +340,55 @@ namespace Puckmite.EditorTools
             }
 
             EditorSceneManager.SaveScene(scene, TitlePath);
+        }
+
+        // The stone faces and health rings (사용자 아트 2026-08-10, UI/stone_ui.aseprite). Frame order is
+        // the mapping (변경 금지): 0-3 = 플레이어 흰 / 적 빨강 / 자폭 노랑 / 반석 회색 faces, rings
+        // 6-8 = max 3, 9-10 = max 2, 12-16 = max 5 (one frame per current health); 4-5 (dithered
+        // ghosts) are not wired yet — 용도 미정.
+        private static void WireStoneUi(Object controller)
+        {
+            Dictionary<string, Sprite> byName = new Dictionary<string, Sprite>();
+            foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath("Assets/Art/Sprites/UI/stone_ui.aseprite"))
+            {
+                if (asset is Sprite sprite)
+                {
+                    byName[sprite.name] = sprite;
+                }
+            }
+
+            if (byName.Count == 0)
+            {
+                Debug.LogWarning("[PuckHero] Assets/Art/Sprites/UI/stone_ui.aseprite not found — stones keep the tinted circles.");
+                return;
+            }
+
+            string[] faceFields = { "_stonePlayerSprite", "_stoneEnemySprite", "_stoneBombSprite", "_stoneAnchorSprite" };
+            for (int i = 0; i < faceFields.Length; i++)
+            {
+                if (byName.TryGetValue("Frame_" + i, out Sprite face))
+                {
+                    SetReference(controller, faceFields[i], face);
+                }
+            }
+
+            int[] ringFrames = { 6, 7, 8, 9, 10, 12, 13, 14, 15, 16 };
+            SerializedObject so = new SerializedObject(controller);
+            SerializedProperty rings = so.FindProperty("_stoneRingSprites");
+            if (rings == null)
+            {
+                Debug.LogError($"[PuckHero] {controller.GetType().Name} has no serialized field '_stoneRingSprites' — ring wiring skipped.");
+                return;
+            }
+
+            rings.arraySize = ringFrames.Length;
+            for (int i = 0; i < ringFrames.Length; i++)
+            {
+                byName.TryGetValue("Frame_" + ringFrames[i], out Sprite ring);
+                rings.GetArrayElementAtIndex(i).objectReferenceValue = ring;
+            }
+
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         // One sound slot. The files exist (사용자 사운드 2026-08-10), so a miss is worth a warning —

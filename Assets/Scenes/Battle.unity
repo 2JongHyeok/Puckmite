@@ -267,6 +267,21 @@ MonoBehaviour:
   _cellRunHealSprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellDamageSprite: {fileID: -928380179603270380, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellEmptySprite: {fileID: -3083967269285103066, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _stonePlayerSprite: {fileID: -737272114374709728, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  _stoneEnemySprite: {fileID: 5748832874344315756, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  _stoneBombSprite: {fileID: -603683288164064859, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  _stoneAnchorSprite: {fileID: 960834581261667888, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  _stoneRingSprites:
+  - {fileID: -5955189309054481440, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: 6289557055805996363, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: 8581086605620900412, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: -7572139353411050526, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: 3696743692528089891, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: -6940465624046922786, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: -4796686914906893538, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: 8020750456253378005, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: -2093722488274268664, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
+  - {fileID: -2567699712167356171, guid: 1901bcb330d05c9418849cb38232195d, type: 3}
   _bgmClip: {fileID: 8300000, guid: ee8f22d9e8dd12e44987c6198663510b, type: 3}
   _sfxStoneImpact: {fileID: 8300000, guid: 888a86f06235a82488a1bcf0749f5564, type: 3}
   _sfxBuffLand: {fileID: 8300000, guid: 57a463cfb8d87034cb42e5502500c33c, type: 3}

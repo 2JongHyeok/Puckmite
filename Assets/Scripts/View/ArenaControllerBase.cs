@@ -109,6 +109,18 @@ namespace Puckmite.View
         [SerializeField] protected Sprite _cellDamageSprite;       // Frame_6: hazard stripes
         [SerializeField] protected Sprite _cellEmptySprite;        // Frame_7: plain
 
+        // The stone faces and health rings (사용자 아트 2026-08-10, UI/stone_ui.aseprite), wired by
+        // Setup for both arena scenes. The faces carry their colour in the art (플레이어 흰 / 적 빨강 /
+        // 자폭 노랑 / 반석 회색 — the battle picks trait faces in its override); the rings come in three
+        // sets by max health — 3 (frames 6-8), 2 (frames 9-10), 5 (frames 12-16) — one frame per current
+        // health. Any other max health falls back to the procedural arcs, unwired art to tinted circles.
+        [SerializeField] protected Sprite _stonePlayerSprite;  // Frame_0
+        [SerializeField] protected Sprite _stoneEnemySprite;   // Frame_1
+        [SerializeField] protected Sprite _stoneBombSprite;    // Frame_2
+        [SerializeField] protected Sprite _stoneAnchorSprite;  // Frame_3
+        [SerializeField] protected Sprite[] _stoneRingSprites; // frames 6,7,8 / 9,10 / 12,13,14,15,16
+        private SpriteRenderer[] _ringRenderers;               // per puck id, over the face while art is wired
+
         // The game's sounds (사용자 사운드 2026-08-10, Assets/Sound/), wired by Setup for both arena
         // scenes. The per-clip gains even out the measured loudness (RMS: impact 0.111, buff 0.058,
         // hit 0.153) with the buff trimmed for its cascades; the ESC menu's sliders scale on top.
@@ -1278,6 +1290,7 @@ namespace Puckmite.View
             _xpFillMeshes = new Mesh[slots];
             _xpFillFraction = new float[slots];
             _puckFlashUntil = new float[slots];
+            _ringRenderers = new SpriteRenderer[slots];
             for (int i = 0; i < roster.Count; i++)
             {
                 Puck p = roster[i];
@@ -1340,6 +1353,15 @@ namespace Puckmite.View
                 }
 
                 _healthArcs[p.Id] = arcs;
+
+                // The health-ring sprite over the face (사용자 아트 2026-08-10) — used instead of the
+                // arcs whenever a frame exists for the stone's current/max health.
+                GameObject ringGo2 = new GameObject($"Puck{p.Id}_HealthRing");
+                ringGo2.transform.SetParent(transform, false);
+                SpriteRenderer ringSr = ringGo2.AddComponent<SpriteRenderer>();
+                ringSr.sortingOrder = 11; // the arcs' layer
+                ringSr.enabled = false;
+                _ringRenderers[p.Id] = ringSr;
             }
         }
 
@@ -1592,6 +1614,31 @@ namespace Puckmite.View
             }
         }
 
+        // The face a stone wears when the art is wired: the colour lives in the art (사용자 지정
+        // 2026-08-10 — 플레이어 흰색, 적 빨간색). The battle overrides this for trait stones.
+        protected virtual Sprite StoneFaceSprite(Puck p)
+        {
+            return p.Owner == PuckOwner.Player ? _stonePlayerSprite : _stoneEnemySprite;
+        }
+
+        // _stoneRingSprites layout (frame order 6,7,8 / 9,10 / 12..16): [0..2] = 1..3 of max 3,
+        // [3..4] = 1..2 of max 2, [5..9] = 1..5 of max 5. Anything else has no frame.
+        private Sprite StoneRingSprite(int health, int maxHealth)
+        {
+            if (_stoneRingSprites == null || _stoneRingSprites.Length < 10 || health <= 0)
+            {
+                return null;
+            }
+
+            switch (maxHealth)
+            {
+                case 3: return health <= 3 ? _stoneRingSprites[health - 1] : null;
+                case 2: return health <= 2 ? _stoneRingSprites[3 + health - 1] : null;
+                case 5: return health <= 5 ? _stoneRingSprites[5 + health - 1] : null;
+                default: return null;
+            }
+        }
+
         protected void UpdatePuckTransforms()
         {
             // Hide every puck and its arcs, then show only those still alive in the sim. Destroyed pucks
@@ -1601,6 +1648,7 @@ namespace Puckmite.View
                 _puckViews[id].enabled = false;
                 _levelRenderers[id].enabled = false;
                 _xpFillRenderers[id].enabled = false;
+                _ringRenderers[id].enabled = false;
                 LineRenderer[] arcs = _healthArcs[id];
                 for (int a = 0; a < arcs.Length; a++)
                 {
@@ -1621,10 +1669,55 @@ namespace Puckmite.View
                 SpriteRenderer sr = _puckViews[p.Id];
                 sr.enabled = true;
                 float diameter = p.Radius * 2f;
-                sr.transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
-                sr.transform.localScale = new Vector3(diameter, diameter, 1f);
+                Sprite face = StoneFaceSprite(p);
+                Sprite ring = face != null ? StoneRingSprite(p.Health, MaxStoneHealth(p)) : null;
+                if (face != null)
+                {
+                    // Art stone: the face fills the puck's diameter and the ring frame — trimmed, but
+                    // sharing the face's canvas pivot — sits on the same anchor at the same scale, so
+                    // the pieces land exactly as authored.
+                    if (sr.sprite != face)
+                    {
+                        sr.sprite = face;
+                    }
 
-                DrawHealthArcs(p);
+                    sr.color = Color.white;
+                    float scale = diameter / face.bounds.size.x;
+                    Bounds fb = face.bounds;
+                    Vector3 anchor = new Vector3(p.Position.x - fb.center.x * scale, p.Position.y - fb.center.y * scale, 0f);
+                    sr.transform.localPosition = anchor;
+                    sr.transform.localScale = new Vector3(scale, scale, 1f);
+
+                    if (ring != null)
+                    {
+                        SpriteRenderer rr = _ringRenderers[p.Id];
+                        if (rr.sprite != ring)
+                        {
+                            rr.sprite = ring;
+                        }
+
+                        rr.transform.localPosition = anchor;
+                        rr.transform.localScale = new Vector3(scale, scale, 1f);
+                        rr.enabled = true;
+                    }
+                    else
+                    {
+                        DrawHealthArcs(p); // a max health outside the drawn sets keeps the arcs
+                    }
+                }
+                else
+                {
+                    if (sr.sprite != ProceduralSprites.Circle())
+                    {
+                        sr.sprite = ProceduralSprites.Circle();
+                    }
+
+                    sr.color = StoneColor(p);
+                    sr.transform.localPosition = new Vector3(p.Position.x, p.Position.y, 0f);
+                    sr.transform.localScale = new Vector3(diameter, diameter, 1f);
+                    DrawHealthArcs(p);
+                }
+
                 DrawLevelAndXp(p);
             }
         }
