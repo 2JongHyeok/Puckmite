@@ -85,8 +85,12 @@ namespace Puckmite.Game
         public int BonusMaxHealth;
 
         // Battle stones bought in shops (design doc 5.6): one more roster stone from the next run, for the
-        // rest of the campaign. Completely separate from per-visit shop stones (design doc 5.4).
+        // rest of the campaign. Separate from shop stones (design doc 5.4).
         public int ExtraBattleStones;
+
+        // Shop stones bought with 스톤 추가하기 (사용자 지정 2026-08-10): each buy permanently raises the
+        // stones every later shop visit starts with — and the buy price itself — until a defeat wipes it.
+        public int ExtraShopStones;
 
         public readonly ShopBoard ShopBoard = new ShopBoard();
 
@@ -154,6 +158,7 @@ namespace Puckmite.Game
             BonusRunHeal = 0;
             BonusMaxHealth = 0;
             ExtraBattleStones = 0;
+            ExtraShopStones = 0;
             ShopBoard.Clear();
         }
     }

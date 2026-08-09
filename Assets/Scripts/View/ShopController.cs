@@ -141,7 +141,9 @@ namespace Puckmite.View
             // stats bought on it persist in the campaign; the offers and this visit's stones are fresh.
             if (_tuning != null)
             {
-                _shopStonesTotal = Mathf.Max(1, _tuning.ShopStonesPerVisit);
+                // Stones bought with 스톤 추가하기 are permanent (사용자 지정 2026-08-10): every visit
+                // starts with the granted ones plus everything bought so far this campaign.
+                _shopStonesTotal = Mathf.Max(1, _tuning.ShopStonesPerVisit + Campaign.ExtraShopStones);
                 _shopStonesLeft = _shopStonesTotal;
                 _stoneCapacity = _shopStonesTotal + MaxStoneBuysPerVisit;
                 RerollOffers();
@@ -406,18 +408,25 @@ namespace Puckmite.View
             _shopOffers[slot] = null; // that slot is spent until a reroll
         }
 
-        // An extra stone for this visit only (design doc 5.4): paid, straight into the hand, and up onto
-        // the entry edge if the throwing phase is already on and no stone is waiting there.
+        // 스톤 추가하기 price: the base plus a permanent step per stone already bought (사용자 지정
+        // 2026-08-10: 15G 시작, 구매마다 +15G — the climb outlives the visit, until defeat resets it).
+        private int StonePrice => _tuning.ShopStonePrice + _tuning.ShopStonePriceStep * Campaign.ExtraShopStones;
+
+        // A paid stone, permanent for the campaign (사용자 지정 2026-08-10): straight into this visit's
+        // hand and onto the entry edge if the throwing phase is already on, and counted into every later
+        // visit's starting stones. Each buy steps the price up for good.
         private void BuyStone()
         {
-            // The capacity guard backs the affordability check: ShopStonePrice is live-tunable, so a price
+            // The capacity guard backs the affordability check: the price is live-tunable, so a price
             // lowered mid-visit could otherwise afford more stones than the view arrays were sized for.
-            if (Campaign.Gold < _tuning.ShopStonePrice || _shopStonesTotal >= _stoneCapacity)
+            int price = StonePrice;
+            if (Campaign.Gold < price || _shopStonesTotal >= _stoneCapacity)
             {
                 return;
             }
 
-            Campaign.Gold -= _tuning.ShopStonePrice;
+            Campaign.Gold -= price;
+            Campaign.ExtraShopStones++;
             int id = _shopStonesTotal; // roster ids run 0..capacity-1; this is the next unused one
             _shopStonesTotal++;
             _shopStonesLeft++;
@@ -906,15 +915,15 @@ namespace Puckmite.View
             _stoneCountText.text = "x " + _shopStonesLeft;
 
             bool canRoll = !_shopThrowing;
-            bool canBuy = Campaign.Gold >= _tuning.ShopStonePrice && _shopStonesTotal < _stoneCapacity;
+            bool canBuy = Campaign.Gold >= StonePrice && _shopStonesTotal < _stoneCapacity;
             // Settlement reads where the stones ARE, so leaving mid-flight would freeze them wherever
             // they happened to be that frame. The way out only opens once the board has settled.
             bool canLeave = _sim.AllAtRest();
             _rollBg.color = canRoll ? Color.white : SideDimmed;
             _buyBg.color = canBuy ? Color.white : SideDimmed;
             _leaveBg.color = canLeave ? Color.white : SideDimmed;
-            _buyPriceText.text = _tuning.ShopStonePrice + "G";
-            _buyPriceText.color = Campaign.Gold >= _tuning.ShopStonePrice
+            _buyPriceText.text = StonePrice + "G";
+            _buyPriceText.color = Campaign.Gold >= StonePrice
                 ? new Color(1f, 0.823f, 0.29f)
                 : new Color(1f, 0.353f, 0.29f);
 

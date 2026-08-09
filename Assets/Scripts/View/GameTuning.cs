@@ -43,7 +43,8 @@ namespace Puckmite.View
         public int GainShield = 2;
         public int GainRunHeal = 5;   // 사용자 지정 2026-08-09 (기존 2)
         public int GainMaxHealth = 5;
-        public int ShopStonePrice = 15;        // extra shop stone, this visit only (design doc 5.4)
+        public int ShopStonePrice = 15;        // extra shop stone, permanent from this visit on (사용자 지정 2026-08-10)
+        public int ShopStonePriceStep = 15;    // added per stone already bought — the price climbs for the campaign
         public int RerollBasePrice = 5;        // the visit's first reroll (design doc 5.3)
         public int RerollPriceStep = 5;        // added on top per reroll already taken this visit
         [Range(0f, 1f)] public float BattleStoneChance = 0.1f; // per-slot odds an offer is a battle stone (design doc 5.3)
