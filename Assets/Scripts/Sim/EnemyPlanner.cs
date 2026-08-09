@@ -475,7 +475,7 @@ namespace Puckmite.Sim
                     continue;
                 }
 
-                BoardCells.SumBuffs(clone.BoardMin, clone.BoardMax, p.Position, p.Radius, occupancyThreshold, out int attack, out int shield);
+                BoardCells.SumBuffs(clone.Layout, clone.BoardMin, clone.BoardMax, p.Position, p.Radius, occupancyThreshold, out int attack, out int shield);
                 score += weights.BuffAttack * attack * p.Level;
                 score += weights.BuffShield * shield * p.Level;
 

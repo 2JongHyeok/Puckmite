@@ -41,7 +41,6 @@ MonoBehaviour:
   ShopStonePrice: 15
   ShopStonePriceStep: 15
   RerollBasePrice: 5
-  RerollPriceStep: 5
   BattleStoneChance: 0.1
   BattleStonePrice: 25
   NoStoneTurnDelay: 0.8

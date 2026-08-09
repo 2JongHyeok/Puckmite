@@ -220,6 +220,13 @@ namespace Puckmite.View
         private const int DebuffCellTurns = 2;
         private readonly List<int> _debuffCells = new List<int>();
         private readonly List<int> _debuffCellTurns = new List<int>();
+        // The hole outlives its cast (사용자 지정 2026-08-10: 사라진 칸은 3턴 뒤 복귀) on the same
+        // boss-turn clock as the corrupted cells; a re-cast moves the hole and restarts it.
+        private const int HoleTurns = 3;
+        private int _holeTurnsLeft;
+        // Reused cast-target buffers: this run's buff cells and empty inner cells (the layout is random).
+        private readonly List<int> _bossBuffCells = new List<int>();
+        private readonly List<int> _bossEmptyCells = new List<int>();
         [SerializeField] private GameObject _cellDebuffPrefab; // UI/cell_debuff.aseprite — corrupted-cell overlay (3-frame loop)
         private GameObject[] _debuffCellFx;      // per inner cell, the overlay instance shown while corrupted
         private SpriteRenderer[] _buffCellViews; // the inner 3x3 quads, recoloured while corrupted (art-less fallback)
@@ -328,6 +335,10 @@ namespace Puckmite.View
 
         protected override void BuildMode()
         {
+            // The run's board deal (사용자 지정 2026-08-10: 버프칸은 런마다 랜덤): the view rolls the
+            // seed, the sim carries the layout — so previews and the AI search see the same board
+            // through Clone, and the physics-slider rebuild carries it like the hole.
+            _sim.Layout = BoardLayout.Roll(new System.Random(Random.Range(int.MinValue, int.MaxValue)));
             BuildBoard();
             BuildCellHighlights();
             BuildPuckViews();
@@ -652,10 +663,10 @@ namespace Puckmite.View
                     ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                     SettleCurrentActor();          // stones lost here go back to the hand as pending
 
-                    // A boss turn (run 5 of either stage): the hole closes, corrupted cells age out
-                    // after their two boss turns, and a fresh ability is cast — then it rolls like any
-                    // enemy (사용자 지정 2026-08-10). With nothing left to roll it takes the no-stone
-                    // beat below like everyone else.
+                    // A boss turn (run 5 of either stage): corrupted cells and the hole age out on
+                    // their boss-turn clocks (2 and 3), and a fresh ability is cast — then it rolls like
+                    // any enemy (사용자 지정 2026-08-10). With nothing left to roll it takes the
+                    // no-stone beat below like everyone else.
                     if (_currentActor != 0 && Campaign.IsBossRun)
                     {
                         ExpireBossEffects();
@@ -955,8 +966,8 @@ namespace Puckmite.View
 
         // --- Boss abilities -------------------------------------------------------------------------
 
-        // Boss turn start: the hole lasts one round as before; each corrupted cell ages out after
-        // DebuffCellTurns boss turns instead (사용자 지정 2026-08-10).
+        // Boss turn start: corrupted cells age out after DebuffCellTurns boss turns, the hole after
+        // HoleTurns (사용자 지정 2026-08-10: 3턴 뒤 복귀) — both on the boss-turn clock.
         private void ExpireBossEffects()
         {
             for (int i = _debuffCells.Count - 1; i >= 0; i--)
@@ -969,7 +980,29 @@ namespace Puckmite.View
                 }
             }
 
-            _sim.ClearHole();
+            if (_sim.HoleCell >= 0)
+            {
+                _holeTurnsLeft--;
+                if (_holeTurnsLeft <= 0)
+                {
+                    _sim.ClearHole();
+                }
+            }
+        }
+
+        // This run's inner cells sorted into the reused cast-target buffers — the layout is random now
+        // (사용자 지정 2026-08-10), so the boss aims at what is actually there.
+        private void CollectInnerCells()
+        {
+            _bossBuffCells.Clear();
+            _bossEmptyCells.Clear();
+            for (int row = 1; row <= 3; row++)
+            {
+                for (int col = 1; col <= 3; col++)
+                {
+                    (_sim.Layout.IsBuff(col, row) ? _bossBuffCells : _bossEmptyCells).Add(col + row * BoardCells.Size);
+                }
+            }
         }
 
         private void CastBossAbility()
@@ -989,17 +1022,22 @@ namespace Puckmite.View
             }
         }
 
-        // 1~2 inner buff cells flip for DebuffCellTurns boss turns: an attack cell now drains attack, a
-        // shield cell now costs health — the sign flip itself happens in CaptureActorBuff. A duplicate
-        // pick simply collapses to one cell (its clock restarting), still inside the designed 1~2 range.
+        // 1~2 buff cells flip for DebuffCellTurns boss turns: an attack cell now drains attack, a
+        // shield cell now costs health — the sign flip itself happens in CaptureActorBuff. Only real
+        // buff cells are picked (the random layout leaves empty inner cells, which have nothing to
+        // flip). A duplicate pick simply collapses to one cell (its clock restarting).
         private void CastCorruptCells()
         {
+            CollectInnerCells();
+            if (_bossBuffCells.Count == 0)
+            {
+                return; // cannot happen (the roll guarantees 7+), but never index an empty pool
+            }
+
             int picks = Random.Range(1, 3); // 1 or 2
             for (int i = 0; i < picks; i++)
             {
-                int col = Random.Range(1, 4);
-                int row = Random.Range(1, 4);
-                int index = col + row * BoardCells.Size;
+                int index = _bossBuffCells[Random.Range(0, _bossBuffCells.Count)];
                 int existing = _debuffCells.IndexOf(index);
                 if (existing >= 0)
                 {
@@ -1014,12 +1052,18 @@ namespace Puckmite.View
 
         }
 
-        // One random cell becomes a hole until the boss's next turn. The hole lives in the SIM (so the
-        // trajectory preview sees it through Clone), but a board at rest takes no sim steps — stones
-        // already parked on the cell are culled right here, the same re-query pattern settlement uses.
+        // One inner cell becomes a hole for HoleTurns boss turns — a buff cell 60% of the time, an
+        // empty inner cell 40% (사용자 지정 2026-08-10), falling back to buffs when the roll left none
+        // empty. The hole lives in the SIM (so the trajectory preview sees it through Clone), but a
+        // board at rest takes no sim steps — stones already parked on the cell are culled right here,
+        // the same re-query pattern settlement uses.
         private void CastHole()
         {
-            _sim.SetHole(Random.Range(0, BoardCells.Size), Random.Range(0, BoardCells.Size));
+            CollectInnerCells();
+            List<int> pool = Random.value < 0.6f || _bossEmptyCells.Count == 0 ? _bossBuffCells : _bossEmptyCells;
+            int cell = pool[Random.Range(0, pool.Count)];
+            _sim.SetHole(cell % BoardCells.Size, cell / BoardCells.Size);
+            _holeTurnsLeft = HoleTurns;
 
             _removeIds.Clear();
             IReadOnlyList<Puck> pucks = _sim.Pucks;
@@ -1554,6 +1598,7 @@ namespace Puckmite.View
             int attack = 0;
             int shield = 0;
             int healthLoss = 0;
+            BoardLayout layout = _sim.Layout;
             Vector2 boardMin = _sim.BoardMin;
             Vector2 boardMax = _sim.BoardMax;
             IReadOnlyList<Puck> pucks = _sim.Pucks;
@@ -1571,14 +1616,15 @@ namespace Puckmite.View
                     int index = _occupiedCells[c];
                     int col = index % BoardCells.Size;
                     int row = index / BoardCells.Size;
-                    if (BoardCells.TypeOf(col, row) != CellType.Buff)
+                    int value = layout.ValueOf(col, row);
+                    if (value <= 0)
                     {
-                        continue;
+                        continue; // the outer ring, or an empty inner cell of this run's deal
                     }
 
-                    int gain = BoardCells.BuffValue(col, row) * p.Level;
-                    bool corrupted = _debuffCells.Contains(index);
-                    if (BoardCells.KindOf(col, row) == BuffKind.Attack)
+                    int gain = value * p.Level;
+                    bool corrupted = CellCorruptedFor(actor, index);
+                    if (layout.KindOf(col, row) == BuffKind.Attack)
                     {
                         attack += corrupted ? -gain : gain;
                     }
@@ -1607,6 +1653,19 @@ namespace Puckmite.View
 
                 CheckGameOver();
             }
+        }
+
+        // Whether a corrupted cell counts as corrupted FOR this actor: the boss is immune to its own
+        // debuff cells (사용자 지정 2026-08-10) — its stones take them at face value. Boss runs field no
+        // other enemies, so "the enemy actor in a boss run" is the boss itself.
+        private bool CellCorruptedFor(int actor, int index)
+        {
+            if (actor != 0 && Campaign.IsBossRun)
+            {
+                return false;
+            }
+
+            return _debuffCells.Contains(index);
         }
 
         // Turn start (design doc 3.6): the actor's buff resets, leaving base stats only until it rolls again.
@@ -1646,6 +1705,7 @@ namespace Puckmite.View
 
             int spawned = 0;
             float start = BuffFlightLead;
+            BoardLayout layout = _sim.Layout;
             Vector2 boardMin = _sim.BoardMin;
             Vector2 boardMax = _sim.BoardMax;
             IReadOnlyList<Puck> pucks = _sim.Pucks;
@@ -1663,13 +1723,13 @@ namespace Puckmite.View
                     int index = _occupiedCells[c];
                     int col = index % BoardCells.Size;
                     int row = index / BoardCells.Size;
-                    if (BoardCells.TypeOf(col, row) != CellType.Buff || _debuffCells.Contains(index))
+                    if (layout.ValueOf(col, row) <= 0 || CellCorruptedFor(actor, index))
                     {
                         continue;
                     }
 
-                    bool isAttack = BoardCells.KindOf(col, row) == BuffKind.Attack;
-                    int points = BoardCells.BuffValue(col, row) * p.Level;
+                    bool isAttack = layout.KindOf(col, row) == BuffKind.Attack;
+                    int points = layout.ValueOf(col, row) * p.Level;
                     Vector2 from = BoardCells.CellCenter(boardMin, boardMax, col, row);
                     for (int n = 0; n < points; n++)
                     {
@@ -1725,7 +1785,8 @@ namespace Puckmite.View
             Vector2 buffCellSize = BoardCells.CellSize(boardMin, boardMax);
 
             _boardUsesArt = _cellAttackSprite != null && _cellAttackStrongSprite != null
-                && _cellShieldSprite != null && _cellShieldStrongSprite != null && _cellDamageSprite != null;
+                && _cellShieldSprite != null && _cellShieldStrongSprite != null && _cellDamageSprite != null
+                && _cellEmptySprite != null; // the random deal leaves empty inner cells, which wear the plain frame
 
             // Outer damage ring: art wears the hazard frame; the flat board background already reads
             // as it otherwise.
@@ -1745,9 +1806,9 @@ namespace Puckmite.View
                 }
             }
 
-            // Inner 3x3 buff cells, by kind (attack/shield) and stronger toward the centre — sheet frames,
-            // or coloured quads until the art exists. The renderers are kept so UpdateBossEffectVisuals
-            // can recolour corrupted ones per frame.
+            // Inner 3x3 as this run's deal has it: buff cells by kind, sparkles on the lv2 centre, the
+            // plain frame on empty cells — sheet frames, or coloured quads until the art exists. The
+            // renderers are kept so UpdateBossEffectVisuals can recolour corrupted ones per frame.
             _buffCellViews = new SpriteRenderer[9];
             for (int row = 1; row <= 3; row++)
             {
@@ -1828,12 +1889,18 @@ namespace Puckmite.View
             return go;
         }
 
-        // The sheet frame a buff cell wears: sword for attack, shield for shield, sparkles on the
-        // stronger centre (BuffValue 2).
+        // The sheet frame an inner cell wears this run: sword for attack, shield for shield, sparkles on
+        // the lv2 centre, the plain frame where the deal left the cell empty.
         private Sprite BuffCellSprite(int col, int row)
         {
-            bool strong = BoardCells.BuffValue(col, row) >= 2;
-            if (BoardCells.KindOf(col, row) == BuffKind.Attack)
+            BoardLayout layout = _sim.Layout;
+            if (!layout.IsBuff(col, row))
+            {
+                return _cellEmptySprite;
+            }
+
+            bool strong = layout.ValueOf(col, row) >= 2;
+            if (layout.KindOf(col, row) == BuffKind.Attack)
             {
                 return strong ? _cellAttackStrongSprite : _cellAttackSprite;
             }
@@ -1841,11 +1908,18 @@ namespace Puckmite.View
             return strong ? _cellShieldStrongSprite : _cellShieldSprite;
         }
 
-        // Placeholder buff-cell tint: attack cells warm, shield cells cool, brighter at the stronger centre.
-        private static Color BuffCellColor(int col, int row)
+        // Placeholder inner-cell tint: attack cells warm, shield cells cool, brighter at the stronger
+        // centre, a flat dark grey on empty cells.
+        private Color BuffCellColor(int col, int row)
         {
-            bool strong = BoardCells.BuffValue(col, row) >= 2; // centre grants 2, other inner cells 1
-            if (BoardCells.KindOf(col, row) == BuffKind.Attack)
+            BoardLayout layout = _sim.Layout;
+            if (!layout.IsBuff(col, row))
+            {
+                return new Color(0.19f, 0.20f, 0.24f); // the shop's empty-cell grey
+            }
+
+            bool strong = layout.ValueOf(col, row) >= 2; // the centre grants 2, other buffs 1
+            if (layout.KindOf(col, row) == BuffKind.Attack)
             {
                 return strong ? new Color(0.46f, 0.30f, 0.16f) : new Color(0.34f, 0.24f, 0.16f);
             }
@@ -2747,6 +2821,37 @@ namespace Puckmite.View
             {
                 _turnText.text = line;
             }
+        }
+
+        // --- Battle GUI ------------------------------------------------------------------------------
+
+        // The buff-cell tooltip (사용자 지정 2026-08-10): kind, level and what standing there grants,
+        // trailing the cursor — the shop board's treatment. The battle draws no other IMGUI, so there
+        // is no z-order to fight; quiet over empty/damage cells, the HUD, menus and mid-aim.
+        private void OnGUI()
+        {
+            if (_sim == null || _gameOver || _pauseMenuOpen || _aiming)
+            {
+                return;
+            }
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            if (PointerOverHud(screen) || !BoardCellAt(ScreenToWorld(screen), out int col, out int row)
+                || !_sim.Layout.IsBuff(col, row))
+            {
+                return;
+            }
+
+            int value = _sim.Layout.ValueOf(col, row);
+            string kind = _sim.Layout.KindOf(col, row) == BuffKind.Attack ? "공격" : "쉴드";
+            string effect = _sim.Layout.KindOf(col, row) == BuffKind.Attack ? "공격력" : "쉴드";
+            DrawCursorTooltip($"{kind} 칸 lv{value}\n올라간 스톤 포인트만큼 {effect} +{value}");
         }
     }
 }

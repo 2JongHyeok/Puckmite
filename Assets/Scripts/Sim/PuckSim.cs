@@ -62,6 +62,18 @@ namespace Puckmite.Sim
         // deterministic.
         private int _holeCell = -1;
 
+        // Which buffs the inner cells carry this run (사용자 지정 2026-08-10: 런마다 랜덤). WHERE the
+        // buffs go is decided outside (the view rolls the dice, like the hole); the layout is immutable,
+        // so clones share the instance and the background AI search reads it safely. Defaults to the
+        // fixed classic board (the shop and headless tests).
+        private BoardLayout _layout = BoardLayout.Classic;
+
+        public BoardLayout Layout
+        {
+            get => _layout;
+            set => _layout = value ?? BoardLayout.Classic;
+        }
+
         public PuckSim(Vector2 boardMin, Vector2 boardMax, PuckSimConfig config)
         {
             _pucks = new List<Puck>();
@@ -367,6 +379,7 @@ namespace Puckmite.Sim
                 new PuckSimConfig(_friction, _restitution, _restThreshold, _wallRestitution, _collisionSpeedKept));
             copy._pucks.AddRange(_pucks); // Puck is a value type, so this copies every field of every puck.
             copy._holeCell = _holeCell;   // so previews and roll-outs see the hole too
+            copy._layout = _layout;       // immutable — shared, so they see the same board too
             return copy;
         }
 

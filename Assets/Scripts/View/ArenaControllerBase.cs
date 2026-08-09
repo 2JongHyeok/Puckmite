@@ -751,10 +751,13 @@ namespace Puckmite.View
             }
 
             // Rebuild in place, preserving every puck exactly as it is now (position, velocity, bounces),
-            // so a slider tweak is felt immediately even mid-roll. The boss's open hole is sim state too —
-            // BuildSimFrom starts fresh, so carry it across or a slider nudge would quietly cancel the ability.
+            // so a slider tweak is felt immediately even mid-roll. The boss's open hole and the run's
+            // board layout are sim state too — BuildSimFrom starts fresh, so carry them across or a
+            // slider nudge would quietly cancel the ability / re-deal the board.
             int hole = _sim.HoleCell;
+            BoardLayout layout = _sim.Layout;
             BuildSimFrom(SnapshotPucks());
+            _sim.Layout = layout;
             if (hole >= 0)
             {
                 _sim.SetHole(hole % BoardCells.Size, hole / BoardCells.Size);
@@ -976,6 +979,40 @@ namespace Puckmite.View
         {
             return world.x >= _sim.BoardMin.x && world.x <= _sim.BoardMax.x
                 && world.y >= _sim.BoardMin.y && world.y <= _sim.BoardMax.y;
+        }
+
+        // The board cell under a point, or false when the point is off the board — the cell tooltips'
+        // and the shop placement's shared lookup.
+        protected bool BoardCellAt(Vector2 world, out int col, out int row)
+        {
+            col = 0;
+            row = 0;
+            if (!CursorInsideBoard(world))
+            {
+                return false;
+            }
+
+            Vector2 size = BoardCells.CellSize(_sim.BoardMin, _sim.BoardMax);
+            col = Mathf.Clamp(Mathf.FloorToInt((world.x - _sim.BoardMin.x) / size.x), 0, BoardCells.Size - 1);
+            row = Mathf.Clamp(Mathf.FloorToInt((world.y - _sim.BoardMin.y) / size.y), 0, BoardCells.Size - 1);
+            return true;
+        }
+
+        // The cursor-trailing IMGUI tooltip, at three times the default label size (사용자 지정
+        // 2026-08-10: 툴팁 3배) and clamped onto the screen. Shared by the battle's cell tooltip and
+        // the shop's cell/offer tooltips.
+        protected static void DrawCursorTooltip(string text)
+        {
+            GUIStyle style = new GUIStyle(GUI.skin.label) { richText = true, fontSize = 36, wordWrap = true };
+            GUIContent content = new GUIContent(text);
+            float width = Mathf.Min(760f, style.CalcSize(content).x + 12f);
+            float height = style.CalcHeight(content, width);
+            Vector2 m = Event.current.mousePosition;
+            float x = Mathf.Min(m.x + 18f, Screen.width - width - 28f);
+            float y = Mathf.Min(m.y + 18f, Screen.height - height - 24f);
+            GUI.Box(new Rect(x, y, width + 20f, height + 14f), GUIContent.none);
+            GUI.Box(new Rect(x, y, width + 20f, height + 14f), GUIContent.none); // stacked for opacity
+            GUI.Label(new Rect(x + 10f, y + 7f, width, height), text, style);
         }
 
         // Drawn and grabbable only while it is tracking the cursor, or while it is the stone being aimed.

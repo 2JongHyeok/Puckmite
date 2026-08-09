@@ -3,14 +3,16 @@ using Vector2 = UnityEngine.Vector2;
 
 namespace Puckmite.Sim
 {
-    /// <summary>Buff cells make up the inner 3x3; the outer ring deals damage (design doc 3.1).</summary>
+    /// <summary>The inner 3x3 vs the damage-dealing outer ring (design doc 3.1). Positional only — which
+    /// buff (if any) an inner cell carries lives in <see cref="BoardLayout"/>.</summary>
     public enum CellType
     {
         Buff,
         Damage,
     }
 
-    /// <summary>Which stat an inner buff cell feeds — the inner 3x3 has attack cells and shield cells (design doc 3.1).</summary>
+    /// <summary>Which stat an inner buff cell feeds (design doc 3.1); the per-run assignment lives in
+    /// <see cref="BoardLayout"/>.</summary>
     public enum BuffKind
     {
         Attack,
@@ -84,29 +86,12 @@ namespace Puckmite.Sim
         // Reused buffer for SumBuffs' occupancy query.
         private static readonly List<int> _buffScratch = new List<int>();
 
-        /// <summary>Value a buff cell grants, stronger toward the centre (design doc 3.1). Placeholder — centre 2,
-        /// other inner cells 1, 0 elsewhere; the real grades are 미정.</summary>
-        public static int BuffValue(int col, int row)
-        {
-            if (TypeOf(col, row) != CellType.Buff)
-            {
-                return 0;
-            }
-
-            return col == 2 && row == 2 ? 2 : 1;
-        }
-
-        /// <summary>Which stat an inner buff cell feeds — a checkerboard split (col+row even = attack). Placeholder.</summary>
-        public static BuffKind KindOf(int col, int row)
-        {
-            return ((col + row) & 1) == 0 ? BuffKind.Attack : BuffKind.Shield;
-        }
-
         /// <summary>
-        /// Sums the buff a single puck receives from the cells it occupies (design doc 3.2: every occupied
-        /// cell applies in full). Attack and shield totals are returned separately.
+        /// Sums the buff a single puck receives from the cells it occupies under the given layout
+        /// (design doc 3.2: every occupied cell applies in full). Attack and shield totals are returned
+        /// separately.
         /// </summary>
-        public static void SumBuffs(Vector2 boardMin, Vector2 boardMax, Vector2 puckPosition, float puckRadius, float threshold, out int attack, out int shield)
+        public static void SumBuffs(BoardLayout layout, Vector2 boardMin, Vector2 boardMax, Vector2 puckPosition, float puckRadius, float threshold, out int attack, out int shield)
         {
             GetOccupiedCells(boardMin, boardMax, puckPosition, puckRadius, threshold, _buffScratch);
             attack = 0;
@@ -116,18 +101,19 @@ namespace Puckmite.Sim
                 int cell = _buffScratch[i];
                 int col = cell % Size;
                 int row = cell / Size;
-                if (TypeOf(col, row) != CellType.Buff)
+                int value = layout.ValueOf(col, row);
+                if (value <= 0)
                 {
                     continue;
                 }
 
-                if (KindOf(col, row) == BuffKind.Attack)
+                if (layout.KindOf(col, row) == BuffKind.Attack)
                 {
-                    attack += BuffValue(col, row);
+                    attack += value;
                 }
                 else
                 {
-                    shield += BuffValue(col, row);
+                    shield += value;
                 }
             }
         }

@@ -56,6 +56,8 @@ namespace Puckmite.Sim
                 HoleDestructionCheck(),
                 HoleCloneCheck(),
                 HoleClearedCheck(),
+                LayoutRollCheck(),
+                LayoutCloneCheck(),
                 BombExplosionCheck(),
                 AnchorCheck(),
                 AnchorPairCheck(),
@@ -657,13 +659,14 @@ namespace Puckmite.Sim
             return new CheckResult("Damage cell settlement", passed, detail);
         }
 
-        /// <summary>Buff-cell layout: checkerboard attack/shield, centre value 2, other inner 1, outer 0 (design doc 3.1).</summary>
+        /// <summary>The classic layout (the default): checkerboard attack/shield, centre value 2, other inner 1, outer 0 (design doc 3.1).</summary>
         public static CheckResult BuffKindCheck()
         {
-            bool centreAttack = BoardCells.KindOf(2, 2) == BuffKind.Attack && BoardCells.BuffValue(2, 2) == 2;
-            bool cornerAttack = BoardCells.KindOf(1, 1) == BuffKind.Attack && BoardCells.BuffValue(1, 1) == 1;
-            bool edgesShield = BoardCells.KindOf(2, 1) == BuffKind.Shield && BoardCells.KindOf(1, 2) == BuffKind.Shield && BoardCells.BuffValue(2, 1) == 1;
-            bool outerZero = BoardCells.BuffValue(0, 0) == 0;
+            BoardLayout classic = BoardLayout.Classic;
+            bool centreAttack = classic.KindOf(2, 2) == BuffKind.Attack && classic.ValueOf(2, 2) == 2;
+            bool cornerAttack = classic.KindOf(1, 1) == BuffKind.Attack && classic.ValueOf(1, 1) == 1;
+            bool edgesShield = classic.KindOf(2, 1) == BuffKind.Shield && classic.KindOf(1, 2) == BuffKind.Shield && classic.ValueOf(2, 1) == 1;
+            bool outerZero = classic.ValueOf(0, 0) == 0 && !classic.IsBuff(0, 0);
 
             bool passed = centreAttack && cornerAttack && edgesShield && outerZero;
             string detail = $"centre atk2={centreAttack}, corner atk1={cornerAttack}, edges shield={edgesShield}, outer 0={outerZero}.";
@@ -678,10 +681,11 @@ namespace Puckmite.Sim
             const float r = 1.5f;
             const float thr = 0.3f;
 
-            BoardCells.SumBuffs(min, max, new Vector2(0f, 0f), r, thr, out int a0, out int s0);   // centre: attack 2
-            BoardCells.SumBuffs(min, max, new Vector2(0f, -5f), r, thr, out int a1, out int s1);  // shield cell (2,1)
-            BoardCells.SumBuffs(min, max, new Vector2(2.5f, -2.5f), r, thr, out int a2, out int s2); // cross-point: atk3 shield2
-            BoardCells.SumBuffs(min, max, new Vector2(-9f, 0f), r, thr, out int a3, out int s3);  // damage cell: none
+            BoardLayout classic = BoardLayout.Classic;
+            BoardCells.SumBuffs(classic, min, max, new Vector2(0f, 0f), r, thr, out int a0, out int s0);   // centre: attack 2
+            BoardCells.SumBuffs(classic, min, max, new Vector2(0f, -5f), r, thr, out int a1, out int s1);  // shield cell (2,1)
+            BoardCells.SumBuffs(classic, min, max, new Vector2(2.5f, -2.5f), r, thr, out int a2, out int s2); // cross-point: atk3 shield2
+            BoardCells.SumBuffs(classic, min, max, new Vector2(-9f, 0f), r, thr, out int a3, out int s3);  // damage cell: none
 
             bool centre = a0 == 2 && s0 == 0;
             bool shieldCell = a1 == 0 && s1 == 1;
@@ -895,6 +899,91 @@ namespace Puckmite.Sim
             bool passed = noneByDefault && survived && crossed;
             string detail = $"noneByDefault={noneByDefault}, survived={survived}, restX={(survived ? after.Position.x : float.NaN):F2} (expect > 2.5).";
             return new CheckResult("Hole cleared", passed, detail);
+        }
+
+        /// <summary>The per-run roll (사용자 지정 2026-08-10): sweeping seeds, every board has 7~9 inner
+        /// buffs, at least 2 of each kind, the centre always a lv2 buff, other buffs lv1, the outer ring
+        /// clean — and the same seed rolls the same board twice.</summary>
+        public static CheckResult LayoutRollCheck()
+        {
+            for (int seed = 0; seed < 200; seed++)
+            {
+                BoardLayout layout = BoardLayout.Roll(new System.Random(seed));
+                BoardLayout again = BoardLayout.Roll(new System.Random(seed));
+
+                int buffs = 0;
+                int attack = 0;
+                int shield = 0;
+                for (int row = 0; row < BoardCells.Size; row++)
+                {
+                    for (int col = 0; col < BoardCells.Size; col++)
+                    {
+                        bool inner = BoardCells.TypeOf(col, row) == CellType.Buff;
+                        if (layout.IsBuff(col, row) != again.IsBuff(col, row)
+                            || layout.ValueOf(col, row) != again.ValueOf(col, row)
+                            || (layout.IsBuff(col, row) && layout.KindOf(col, row) != again.KindOf(col, row)))
+                        {
+                            return new CheckResult("Layout roll", false, $"seed {seed}: two rolls differ at ({col},{row}).");
+                        }
+
+                        if (!layout.IsBuff(col, row))
+                        {
+                            continue;
+                        }
+
+                        if (!inner)
+                        {
+                            return new CheckResult("Layout roll", false, $"seed {seed}: outer cell ({col},{row}) is a buff.");
+                        }
+
+                        buffs++;
+                        if (layout.KindOf(col, row) == BuffKind.Attack)
+                        {
+                            attack++;
+                        }
+                        else
+                        {
+                            shield++;
+                        }
+
+                        int expected = col == 2 && row == 2 ? BoardLayout.CentreLevel : 1;
+                        if (layout.ValueOf(col, row) != expected)
+                        {
+                            return new CheckResult("Layout roll", false, $"seed {seed}: cell ({col},{row}) level {layout.ValueOf(col, row)}, expected {expected}.");
+                        }
+                    }
+                }
+
+                if (buffs < BoardLayout.MinBuffCells || buffs > BoardLayout.MaxBuffCells
+                    || attack < BoardLayout.MinPerKind || shield < BoardLayout.MinPerKind
+                    || !layout.IsBuff(2, 2))
+                {
+                    return new CheckResult("Layout roll", false, $"seed {seed}: buffs={buffs} (atk {attack}/shd {shield}), centre buff={layout.IsBuff(2, 2)}.");
+                }
+            }
+
+            return new CheckResult("Layout roll", true, "200 seeds: 7~9 buffs, 2+ per kind, centre lv2, others lv1, outer clean, deterministic.");
+        }
+
+        /// <summary>A clone carries the sim's layout, so previews and AI roll-outs sum buffs off the same
+        /// board as the live game.</summary>
+        public static CheckResult LayoutCloneCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            BoardLayout rolled = BoardLayout.Roll(new System.Random(7));
+            sim.Layout = rolled;
+            PuckSim clone = sim.Clone();
+
+            bool carried = ReferenceEquals(clone.Layout, rolled);
+            BoardCells.SumBuffs(sim.Layout, sim.BoardMin, sim.BoardMax, new Vector2(0f, 0f), 1.5f, 0.3f, out int a0, out int s0);
+            BoardCells.SumBuffs(clone.Layout, clone.BoardMin, clone.BoardMax, new Vector2(0f, 0f), 1.5f, 0.3f, out int a1, out int s1);
+            bool sameSum = a0 == a1 && s0 == s1;
+            bool centreCounts = a0 + s0 >= BoardLayout.CentreLevel; // the centre is always a lv2 buff
+
+            bool passed = carried && sameSum && centreCounts;
+            string detail = $"carried={carried}, sums a{a0}s{s0} vs a{a1}s{s1}, centre counts={centreCounts}.";
+            return new CheckResult("Layout clone", passed, detail);
         }
 
         /// <summary>자폭 (design doc 4.3): a bomb meeting a player stone detonates — the bomb dies, every

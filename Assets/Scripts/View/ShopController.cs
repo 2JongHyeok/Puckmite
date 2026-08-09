@@ -49,6 +49,7 @@ namespace Puckmite.View
         private const int MaxExtraSparkles = 4;        // display cap; levels keep counting past it
         private static readonly Color XpTickFilled = new Color(0.45f, 1f, 0.5f, 0.9f); // the stones' XP green
         private static readonly Color XpTickEmpty = new Color(0.08f, 0.10f, 0.14f, 0.9f);
+        private static readonly Color XpTickBlink = new Color(0.8f, 1f, 0.85f, 1f); // the stack-hover flash
 
         // The merchant's click affordances: silhouette outline (faint = clickable, bright = hovered) and
         // the floating "상점 열기" label. The click/hover disc comes from the art bounds, like the battle
@@ -122,6 +123,17 @@ namespace Puckmite.View
         private int _shownShield;
         private int _shownAttack;
 
+        // Leaving with unrolled stones asks first (사용자 지정 2026-08-10): the difficulty picker's
+        // dress, [전투로 이동] settles and goes, [뒤로가기]/ESC returns to the board. Built lazily on
+        // the first open, like the pause menu.
+        private bool _leaveConfirmOpen;
+        private GameObject _leaveConfirmRoot;
+        private TextMeshPro _leaveConfirmBody;
+        private SpriteRenderer _leaveGoOutline;
+        private SpriteRenderer _leaveGoBg;
+        private SpriteRenderer _leaveBackOutline;
+        private SpriteRenderer _leaveBackBg;
+
         // One merchant slot: an upgrade cell, or (rarely) a battle stone in the same slot (design doc 5.3).
         private enum OfferType
         {
@@ -140,7 +152,6 @@ namespace Puckmite.View
         private int _shopStonesLeft;
         private int _shopStonesTotal;
         private readonly List<ShopOffer?> _shopOffers = new List<ShopOffer?>(); // null = sold until a reroll
-        private int _rerollCount;            // rerolls taken this visit; the price climbs with it (design doc 5.3)
         private bool _hasPendingCell;        // a bought cell is riding the cursor, waiting to be placed
         private UpgradeKind _pendingCell;
         private int _pendingSlot = -1;
@@ -253,6 +264,7 @@ namespace Puckmite.View
             UpdateMerchantHighlight();
             UpdateMerchantPanel();
             UpdateShopSideUi();
+            UpdateLeaveConfirm();
             UpdateShopHeroStats();
             TickLeaveFlights();
             UpdateGhost();
@@ -264,7 +276,7 @@ namespace Puckmite.View
         // toggles while nothing else owns the key.
         protected override bool PauseMenuBlocked()
         {
-            return _merchantOpen || _confirmReplaceOpen;
+            return _merchantOpen || _confirmReplaceOpen || _leaveConfirmOpen;
         }
 
         // The ESC menu's bottom button (사용자 지정 2026-08-10).
@@ -423,14 +435,13 @@ namespace Puckmite.View
             }
         }
 
-        // What the next reroll costs: the price climbs with every reroll taken this visit (design doc 5.3).
+        // Every reroll costs the same flat price (사용자 지정 2026-08-10: 5G 고정, 가격 상승 없음).
         private int RerollPrice()
         {
-            return _tuning.RerollBasePrice + _tuning.RerollPriceStep * _rerollCount;
+            return _tuning.RerollBasePrice;
         }
 
-        // The panel's reroll button: every slot is redrawn, sold ones included, and each reroll makes
-        // the next one dearer (design doc 5.3).
+        // The panel's reroll button: every slot is redrawn, sold ones included (design doc 5.3).
         private void TryReroll()
         {
             int price = RerollPrice();
@@ -440,7 +451,6 @@ namespace Puckmite.View
             }
 
             Campaign.Gold -= price;
-            _rerollCount++;
             RerollOffers();
         }
 
@@ -778,16 +788,26 @@ namespace Puckmite.View
         // One bought cell's stack gauge and level sparkles: the ticks along the bottom fill with each
         // same-kind placement, and the sparkle count equals the cell's level (사용자 지정) — the face
         // art bakes the first ones (one per face; two on the lv2+ attack/shield faces), extras continue
-        // the top-left row here, capped at MaxExtraSparkles for display.
-        private void UpdateCellProgress(int index, ShopCell cell, Vector2 center)
+        // the top-left row here, capped at MaxExtraSparkles for display. Hovering a same-kind purchase
+        // over the cell blinks the tick that placement would fill — all of them when it would complete
+        // the gauge, the level-up tease (사용자 지정 2026-08-10).
+        private void UpdateCellProgress(int index, ShopCell cell, Vector2 center, bool stackHover)
         {
+            bool blinkOn = stackHover && Mathf.FloorToInt(Time.time * 4f) % 2 == 0;
+            bool wouldLevelUp = cell.Xp >= ShopBoard.XpPerLevel - 1;
             SpriteRenderer[] ticks = _shopCellXpTicks[index];
             for (int t = 0; t < ticks.Length; t++)
             {
                 ticks[t].enabled = !cell.IsEmpty;
                 if (!cell.IsEmpty)
                 {
-                    ticks[t].color = t < cell.Xp ? XpTickFilled : XpTickEmpty;
+                    Color tickColor = t < cell.Xp ? XpTickFilled : XpTickEmpty;
+                    if (blinkOn && (wouldLevelUp || t == cell.Xp))
+                    {
+                        tickColor = XpTickBlink;
+                    }
+
+                    ticks[t].color = tickColor;
                 }
             }
 
@@ -1031,7 +1051,7 @@ namespace Puckmite.View
                 return;
             }
 
-            bool clickable = !_shopThrowing && !_merchantOpen && !_confirmReplaceOpen;
+            bool clickable = !_shopThrowing && !_merchantOpen && !_confirmReplaceOpen && !_leaveConfirmOpen;
             _merchantLabelRoot.SetActive(clickable);
             if (!clickable)
             {
@@ -1164,7 +1184,7 @@ namespace Puckmite.View
                 _goldReadoutText.text = Campaign.Gold + "G";
             }
 
-            bool shown = !_merchantOpen && !_confirmReplaceOpen;
+            bool shown = !_merchantOpen && !_confirmReplaceOpen && !_leaveConfirmOpen;
             if (_sideRoot.activeSelf != shown)
             {
                 _sideRoot.SetActive(shown);
@@ -1231,7 +1251,111 @@ namespace Puckmite.View
             }
             else if (hoverLeave)
             {
+                // Unrolled stones are about to be wasted — ask first (사용자 지정 2026-08-10); with
+                // every stone thrown the leave is immediate, as before.
+                if (_shopStonesLeft > 0)
+                {
+                    SetLeaveConfirmOpen(true);
+                }
+                else
+                {
+                    LeaveShop();
+                }
+            }
+        }
+
+        // The leave-confirm dialog (사용자 지정 2026-08-10), in the difficulty picker's dress: thin gold
+        // frame, dark box, gold title — parked on the camera centre like the pause menu.
+        private void BuildLeaveConfirm()
+        {
+            _leaveConfirmRoot = new GameObject("LeaveConfirm");
+            _leaveConfirmRoot.transform.SetParent(transform, false);
+            _leaveConfirmRoot.transform.localPosition = new Vector3(0f, 6.25f, 0f);
+            Transform root = _leaveConfirmRoot.transform;
+
+            Vector2 panelSize = new Vector2(24f, 13.5f);
+            SideRect(root, "Frame", null, Vector2.zero, panelSize + new Vector2(0.3f, 0.3f), new Color(0.72f, 0.55f, 0.22f), 40);
+            SideRect(root, "PanelBg", null, Vector2.zero, panelSize, new Color(0.08f, 0.10f, 0.15f, 0.97f), 41);
+
+            TextMeshPro title = SideText(root, "Title", "상점을 떠나시겠습니까?", new Vector2(0f, 4.6f),
+                new Vector2(20f, 2.2f), TextAlignmentOptions.Center, 8f, 45);
+            title.color = new Color(1f, 0.85f, 0.35f);
+            _leaveConfirmBody = SideText(root, "Body", "", new Vector2(0f, 2.2f),
+                new Vector2(21f, 1.8f), TextAlignmentOptions.Center, 6f, 45);
+
+            Vector2 buttonSize = new Vector2(17.6f, 3.4f);
+            _leaveGoOutline = SideRect(root, "GoOutline", null, new Vector2(0f, -0.6f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
+            _leaveGoOutline.enabled = false;
+            _leaveGoBg = SideRect(root, "GoBg", null, new Vector2(0f, -0.6f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
+            SideText(root, "GoLabel", "전투로 이동", new Vector2(0f, -0.6f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
+
+            _leaveBackOutline = SideRect(root, "BackOutline", null, new Vector2(0f, -4.6f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
+            _leaveBackOutline.enabled = false;
+            _leaveBackBg = SideRect(root, "BackBg", null, new Vector2(0f, -4.6f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
+            SideText(root, "BackLabel", "뒤로가기", new Vector2(0f, -4.6f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
+
+            _leaveConfirmRoot.SetActive(false);
+        }
+
+        private void SetLeaveConfirmOpen(bool open)
+        {
+            if (open && _leaveConfirmRoot == null)
+            {
+                BuildLeaveConfirm();
+            }
+
+            _leaveConfirmOpen = open;
+            if (_leaveConfirmRoot != null)
+            {
+                _leaveConfirmRoot.SetActive(open);
+            }
+        }
+
+        // Hover, clicks and ESC for the leave-confirm dialog. Only [전투로 이동] leaves; [뒤로가기] and
+        // ESC return to the board with everything as it was (사용자 지정).
+        private void UpdateLeaveConfirm()
+        {
+            if (!_leaveConfirmOpen || _leaveConfirmRoot == null)
+            {
+                return;
+            }
+
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame)
+            {
+                SetLeaveConfirmOpen(false);
+                return;
+            }
+
+            _leaveConfirmBody.text = $"아직 굴리지 않은 스톤이 {_shopStonesLeft}개 남아 있습니다.";
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            Vector2 world = ScreenToWorld(screen);
+            bool blocked = PointerOverShopGui(screen);
+            bool hoverGo = !blocked && InBounds(_leaveGoBg, world);
+            bool hoverBack = !blocked && InBounds(_leaveBackBg, world);
+            _leaveGoOutline.enabled = hoverGo;
+            _leaveBackOutline.enabled = hoverBack;
+
+            if (!mouse.leftButton.wasPressedThisFrame)
+            {
+                return;
+            }
+
+            if (hoverGo)
+            {
+                SetLeaveConfirmOpen(false);
                 LeaveShop();
+            }
+            else if (hoverBack)
+            {
+                SetLeaveConfirmOpen(false);
             }
         }
 
@@ -1314,6 +1438,20 @@ namespace Puckmite.View
                 return;
             }
 
+            // Which cell the carried purchase would stack onto (same kind under the cursor): its gauge
+            // blinks below as the level-up tease (사용자 지정 2026-08-10).
+            int stackHoverIndex = -1;
+            if (_hasPendingCell && !_merchantOpen && !_confirmReplaceOpen && !_leaveConfirmOpen && Mouse.current != null)
+            {
+                Vector2 hoverScreen = Mouse.current.position.ReadValue();
+                if (!PointerOverShopGui(hoverScreen)
+                    && BoardCellAt(ScreenToWorld(hoverScreen), out int stackCol, out int stackRow)
+                    && Campaign.ShopBoard.Preview(stackCol, stackRow, _pendingCell) == ShopPlacement.Upgraded)
+                {
+                    stackHoverIndex = stackCol + stackRow * BoardCells.Size;
+                }
+            }
+
             Vector2 boardMin = _sim.BoardMin;
             Vector2 boardMax = _sim.BoardMax;
             Vector2 cellSize = BoardCells.CellSize(boardMin, boardMax);
@@ -1344,12 +1482,12 @@ namespace Puckmite.View
                             : Color.Lerp(UpgradeColor(cell.Kind), Color.white, Mathf.Min(0.12f * (cell.Level - 1), 0.5f));
                     }
 
-                    UpdateCellProgress(index, cell, center);
+                    UpdateCellProgress(index, cell, center, index == stackHoverIndex);
                 }
             }
 
             _pendingCellGhost.enabled = false;
-            if (!_hasPendingCell || _merchantOpen || _confirmReplaceOpen)
+            if (!_hasPendingCell || _merchantOpen || _confirmReplaceOpen || _leaveConfirmOpen)
             {
                 return;
             }
@@ -1366,7 +1504,7 @@ namespace Puckmite.View
                 return;
             }
 
-            if (ShopCellAt(ScreenToWorld(screen), out int hoverCol, out int hoverRow))
+            if (BoardCellAt(ScreenToWorld(screen), out int hoverCol, out int hoverRow))
             {
                 Vector2 center = BoardCells.CellCenter(boardMin, boardMax, hoverCol, hoverRow);
                 Sprite ghostArt = _shopUsesArt ? UpgradeSprite(_pendingCell, 1) : null;
@@ -1398,7 +1536,7 @@ namespace Puckmite.View
             _launchReady = false;
 
             Mouse mouse = Mouse.current;
-            if (mouse == null || _merchantOpen || _confirmReplaceOpen || _leaving || _pauseMenuOpen)
+            if (mouse == null || _merchantOpen || _confirmReplaceOpen || _leaveConfirmOpen || _leaving || _pauseMenuOpen)
             {
                 return; // the modals block clicks through them; the leave flight locks the board entirely
             }
@@ -1419,7 +1557,7 @@ namespace Puckmite.View
                     return;
                 }
 
-                if (mouse.leftButton.wasPressedThisFrame && !overGui && ShopCellAt(world, out int col, out int row))
+                if (mouse.leftButton.wasPressedThisFrame && !overGui && BoardCellAt(world, out int col, out int row))
                 {
                     PlacePendingCell(col, row);
                 }
@@ -1495,22 +1633,6 @@ namespace Puckmite.View
             }
         }
 
-        // The board cell under a point, or false when the point is off the board.
-        private bool ShopCellAt(Vector2 world, out int col, out int row)
-        {
-            col = 0;
-            row = 0;
-            if (!CursorInsideBoard(world))
-            {
-                return false;
-            }
-
-            Vector2 size = BoardCells.CellSize(_sim.BoardMin, _sim.BoardMax);
-            col = Mathf.Clamp(Mathf.FloorToInt((world.x - _sim.BoardMin.x) / size.x), 0, BoardCells.Size - 1);
-            row = Mathf.Clamp(Mathf.FloorToInt((world.y - _sim.BoardMin.y) / size.y), 0, BoardCells.Size - 1);
-            return true;
-        }
-
         // The rects DrawShopGui actually occupies, plus the debug panel while open. The battle HUD panel is
         // not drawn in shop mode, so board clicks must not be blocked by its rect — doing that left an
         // invisible dead strip down the left, right where the merchant stands.
@@ -1552,7 +1674,14 @@ namespace Puckmite.View
             // control can take a click through the panel.
             if (_merchantOpen)
             {
-                DrawMerchantTooltip(rich);
+                DrawMerchantTooltip();
+                return;
+            }
+
+            // The leave-confirm panel is world-space sprites; IMGUI draws nothing under it so no board
+            // tooltip bleeds over the dialog.
+            if (_leaveConfirmOpen)
+            {
                 return;
             }
 
@@ -1565,12 +1694,13 @@ namespace Puckmite.View
                     $"Placing {UpgradeName(_pendingCell)} — right-click to cancel", rich);
             }
 
-            DrawBoardCellTooltip(rich);
+            DrawBoardCellTooltip();
         }
 
-        // Kind and level of the bought board cell under the cursor (사용자 지정 2026-08-09) — quiet on
-        // empty cells, over the GUI, and mid-drag where it would only chase the aim.
-        private void DrawBoardCellTooltip(GUIStyle rich)
+        // Kind, level and per-stone effect of the bought board cell under the cursor (사용자 지정
+        // 2026-08-10: 수치 표기 — 칸 레벨 × Gain, 튜닝 연동이라 거짓말하지 않는다) — quiet on empty
+        // cells, over the GUI, and mid-drag where it would only chase the aim.
+        private void DrawBoardCellTooltip()
         {
             if (_aiming)
             {
@@ -1584,7 +1714,7 @@ namespace Puckmite.View
             }
 
             Vector2 screen = mouse.position.ReadValue();
-            if (PointerOverShopGui(screen) || !ShopCellAt(ScreenToWorld(screen), out int col, out int row))
+            if (PointerOverShopGui(screen) || !BoardCellAt(ScreenToWorld(screen), out int col, out int row))
             {
                 return;
             }
@@ -1595,15 +1725,12 @@ namespace Puckmite.View
                 return;
             }
 
-            string text = $"{KoreanUpgradeName(cell.Kind)} 칸 · 레벨 {cell.Level}";
-            Vector2 m = Event.current.mousePosition;
-            GUI.Box(new Rect(m.x + 16f, m.y + 16f, 190f, 28f), GUIContent.none);
-            GUI.Label(new Rect(m.x + 24f, m.y + 20f, 180f, 22f), text, rich);
+            DrawCursorTooltip($"{KoreanUpgradeName(cell.Kind)} 칸 lv{cell.Level}\n해당 칸에 올라간 스톤 수 만큼 {KoreanUpgradeEffect(cell.Kind)} +{cell.Level * GainOf(cell.Kind)}");
         }
 
         // The cursor-following tooltip for the offer the panel reports as hovered — the one piece of the
         // buying screen still on IMGUI, so it can sit beside the cursor for free.
-        private void DrawMerchantTooltip(GUIStyle rich)
+        private void DrawMerchantTooltip()
         {
             int slot = _merchantPanel != null ? _merchantPanel.HoveredSlot : -1;
             if (slot < 0 || slot >= _shopOffers.Count || !_shopOffers[slot].HasValue)
@@ -1615,11 +1742,9 @@ namespace Puckmite.View
             ShopOffer offer = _shopOffers[slot].Value;
             string text = offer.Type == OfferType.BattleStone
                 ? "전투 스톤\n전투에서 사용할 수 있는 스톤 수 +1"
-                : $"{KoreanUpgradeName(offer.Kind)} 칸\n해당 칸에 올라간 스톤 수 만큼 {KoreanUpgradeEffect(offer.Kind)} +{GainOf(offer.Kind)}";
+                : $"{KoreanUpgradeName(offer.Kind)} 칸 lv1\n해당 칸에 올라간 스톤 수 만큼 {KoreanUpgradeEffect(offer.Kind)} +{GainOf(offer.Kind)}";
 
-            Vector2 m = Event.current.mousePosition;
-            GUI.Box(new Rect(m.x + 16f, m.y + 16f, 260f, 46f), GUIContent.none);
-            GUI.Label(new Rect(m.x + 24f, m.y + 20f, 250f, 40f), text, rich);
+            DrawCursorTooltip(text);
         }
 
         // The replace warning (design doc 5.1): OK replaces the cell and its levels are gone, cancel keeps
