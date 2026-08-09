@@ -42,9 +42,9 @@ namespace Puckmite.EditorTools
             EnsureTuningAsset();
             SetupScene<BattleController>(BattlePath, "Battle");
             SetupScene<ShopController>(ShopPath, "Shop");
-            SetupSimpleScene<TitleController>(TitlePath, "Title");
-            SetupSimpleScene<GameOverController>(GameOverPath, "GameOver");
-            SetupSimpleScene<GameClearController>(GameClearPath, "GameClear");
+            SetupTitleScene();
+            SetupSimpleScene<GameOverController>(GameOverPath, "GameOver", "Assets/Art/Sprites/UI/screen_over", false);
+            SetupSimpleScene<GameClearController>(GameClearPath, "GameClear", "Assets/Art/Sprites/UI/screen_clear", true);
 
             // Title first: index 0 is what a build opens with (사용자 지정: 제일 처음 씬).
             EditorBuildSettings.scenes = new[]
@@ -197,9 +197,9 @@ namespace Puckmite.EditorTools
             }
         }
 
-        // The framing screens (title / game over / game clear) need only a camera and their controller —
-        // no tuning, no debug panel, nothing to wire.
-        private static void SetupSimpleScene<T>(string path, string rootName) where T : MonoBehaviour
+        // The framing screens (game over / game clear): a camera, their controller, and the mock
+        // backdrop's promised path — plus the hero prefab for the screens that show one (clear).
+        private static void SetupSimpleScene<T>(string path, string rootName, string backgroundPath, bool wireHero) where T : MonoBehaviour
         {
             Scene scene = File.Exists(path)
                 ? EditorSceneManager.OpenScene(path, OpenSceneMode.Single)
@@ -213,12 +213,77 @@ namespace Puckmite.EditorTools
                 camGo.AddComponent<AudioListener>();
             }
 
-            if (Object.FindAnyObjectByType<T>() == null)
+            T controller = Object.FindAnyObjectByType<T>();
+            if (controller == null)
             {
-                new GameObject(rootName).AddComponent<T>();
+                controller = new GameObject(rootName).AddComponent<T>();
+            }
+
+            SetOptionalSprite(controller, "_backgroundSprite", backgroundPath);
+            SetOptionalSprite(controller, "_buttonSprite", "Assets/Art/Sprites/UI/btn_title");
+            if (wireHero)
+            {
+                GameObject heroArt = AssetDatabase.LoadAssetAtPath<GameObject>(HeroArtPath);
+                if (heroArt != null)
+                {
+                    SetReference(controller, "_heroBodyPrefab", heroArt);
+                }
             }
 
             EditorSceneManager.SaveScene(scene, path);
+        }
+
+        // The title (user mock 2026-08-09): its own controller with the backdrop, the live hero, the
+        // start button and the difficulty picker's art — plus the tuning the difficulty pick writes.
+        private static void SetupTitleScene()
+        {
+            Scene scene = File.Exists(TitlePath)
+                ? EditorSceneManager.OpenScene(TitlePath, OpenSceneMode.Single)
+                : EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            Camera camera = Object.FindAnyObjectByType<Camera>();
+            if (camera == null)
+            {
+                GameObject camGo = new GameObject("Main Camera") { tag = "MainCamera" };
+                camGo.AddComponent<Camera>();
+                camGo.AddComponent<AudioListener>();
+            }
+
+            TitleController controller = Object.FindAnyObjectByType<TitleController>();
+            if (controller == null)
+            {
+                controller = new GameObject("Title").AddComponent<TitleController>();
+            }
+
+            // Loaded fresh after the scene switch above (asset instances must not cross scene loads).
+            GameTuning tuning = AssetDatabase.LoadAssetAtPath<GameTuning>(TuningPath);
+            if (tuning == null)
+            {
+                Debug.LogError($"[PuckHero] {TuningPath} could not be loaded — the title is left unwired.");
+                return;
+            }
+
+            SetReference(controller, "_tuning", tuning);
+            SetOptionalSprite(controller, "_backgroundSprite", "Assets/Art/Sprites/UI/screen_title");
+            SetOptionalSprite(controller, "_startButtonSprite", "Assets/Art/Sprites/UI/btn_start");
+            SetOptionalSprite(controller, "_closeButtonSprite", "Assets/Art/Sprites/UI/btn_close");
+            SetOptionalSprite(controller, "_diffVeryEasySprite", "Assets/Art/Sprites/UI/btn_diff_veryeasy");
+            SetOptionalSprite(controller, "_diffEasySprite", "Assets/Art/Sprites/UI/btn_diff_easy");
+            SetOptionalSprite(controller, "_diffNormalSprite", "Assets/Art/Sprites/UI/btn_diff_normal");
+            SetOptionalSprite(controller, "_diffHardSprite", "Assets/Art/Sprites/UI/btn_diff_hard");
+            SetOptionalSprite(controller, "_diffVeryHardSprite", "Assets/Art/Sprites/UI/btn_diff_veryhard");
+
+            GameObject titleHero = AssetDatabase.LoadAssetAtPath<GameObject>(HeroArtPath);
+            if (titleHero == null)
+            {
+                Debug.LogWarning($"[PuckHero] {HeroArtPath} not found — the title shows no hero.");
+            }
+            else
+            {
+                SetReference(controller, "_heroBodyPrefab", titleHero);
+            }
+
+            EditorSceneManager.SaveScene(scene, TitlePath);
         }
 
         // One enemy kind's art prefab. The art exists for every kind in the spawn pool, so a missing

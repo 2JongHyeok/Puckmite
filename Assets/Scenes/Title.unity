@@ -240,6 +240,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6c93d7c01882ef44da63835e791270bd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Puckmite.View.TitleController
+  _tuning: {fileID: 11400000, guid: dba168e68fa84464d81f3c3288574921, type: 2}
+  _backgroundSprite: {fileID: 468474139002670839, guid: e6d366820df98a74b910fd71947b2be1, type: 3}
+  _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
+  _startButtonSprite: {fileID: -7841028581932731570, guid: 1bbdd08bfe90d0248b0f09c2189b11e2, type: 3}
+  _closeButtonSprite: {fileID: 2262697476317888842, guid: b97806987a418064f93dfe24d246770c, type: 3}
+  _diffVeryEasySprite: {fileID: -5381467545387002756, guid: a3f266bd985211448b51d8accb23ed64, type: 3}
+  _diffEasySprite: {fileID: 450359657859651006, guid: 4d1c5fd5c57fb534ea6c09cd83db5ab2, type: 3}
+  _diffNormalSprite: {fileID: 2698434602638420644, guid: 49e9a49f4334c984cbf555038b6ca5c6, type: 3}
+  _diffHardSprite: {fileID: -2338511720403303956, guid: 14003853838499e4db98773df9def854, type: 3}
+  _diffVeryHardSprite: {fileID: -1597980559717432979, guid: 13defce84fd419648b7471e2589eb9dd, type: 3}
 --- !u!4 &470066558
 Transform:
   m_ObjectHideFlags: 0

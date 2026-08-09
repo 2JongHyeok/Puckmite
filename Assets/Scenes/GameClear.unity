@@ -240,6 +240,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 493d6a43a21cc814fb1d21bfbb91151a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Puckmite.View.GameClearController
+  _backgroundSprite: {fileID: 5472475811352091215, guid: 3bd916cbe886a634c9a3df2064dd7127, type: 3}
+  _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
+  _buttonSprite: {fileID: -8660165384256758582, guid: bd9db6fb5feed3f46bbd95de9f7d1355, type: 3}
 --- !u!4 &470066558
 Transform:
   m_ObjectHideFlags: 0
