@@ -24,7 +24,12 @@ namespace Puckmite.View
         private const float CharArtScale = 7.9f;     // world scale of character art: the hero's 81px ≈ CharBodyHeight,
                                                      // and the enemies share the pixel grid (design doc 4.4)
         private const float EnemyMinBodyHeight = 3.5f; // short creatures (the slime) still read at least this tall (사용자 지정)
-        private const float CharSpread = 9f;         // x of the leftmost/rightmost character
+        // Character row spread (사용자 지정 2026-08-10: 플레이어와 적 사이를 더 벌림): the player parks
+        // well left, the enemies keep to their own band on the right — no more even spread that walked
+        // the first enemy up next to the player.
+        private const float PlayerCharX = -13f;
+        private const float EnemyCharMinX = 5f;
+        private const float EnemyCharMaxX = 13f;
         private const float StatRowHeight = 1.1f;    // one icon-and-number row
         private const int StatRowCount = 4;          // top to bottom: health, shield, attack, stones
         private const float StatBlockBottom = CharFeetY + CharBodyHeight + 0.4f;
@@ -138,8 +143,10 @@ namespace Puckmite.View
         // 발사 스킵 (사용자 지정 2026-08-10): the pre-roll enemy click is gone — skipping the roll is
         // this explicit button under the left info column, art via the promised path UI/btn_skip_roll.
         [SerializeField] private Sprite _skipButtonSprite;
-        private static readonly Vector2 SkipButtonPos = new Vector2(-19f, -6f);
-        private static readonly Vector2 SkipButtonSize = new Vector2(9f, 3.5f);
+        // The box carries the art's own 200x38 aspect (사용자 지정 2026-08-10: 눌림 제거), shifted a
+        // touch left so the wider face stays clear of the board's left entry edge.
+        private static readonly Vector2 SkipButtonPos = new Vector2(-20f, -6f);
+        private static readonly Vector2 SkipButtonSize = new Vector2(12.6f, 2.4f);
         private SpriteRenderer _skipOutline;
         private SpriteRenderer _skipBg;
         private bool _skipUsesArt;
@@ -2171,16 +2178,22 @@ namespace Puckmite.View
             return tmp;
         }
 
-        // Spreads the actors evenly across the top, player leftmost.
+        // The player far left, the enemies spread across their right-side band (사용자 지정 2026-08-10).
         private float CharacterX(int actor)
         {
-            if (_actorCount <= 1)
+            if (actor == 0)
             {
-                return 0f;
+                return PlayerCharX;
             }
 
-            float t = (float)actor / (_actorCount - 1);
-            return Mathf.Lerp(-CharSpread, CharSpread, t);
+            int enemies = _actorCount - 1;
+            if (enemies <= 1)
+            {
+                return EnemyCharMaxX;
+            }
+
+            float t = (float)(actor - 1) / (enemies - 1);
+            return Mathf.Lerp(EnemyCharMinX, EnemyCharMaxX, t);
         }
 
         private static Color ActorColor(int actor)
