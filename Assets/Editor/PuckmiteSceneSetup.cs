@@ -137,7 +137,7 @@ namespace Puckmite.EditorTools
 
             // The game's sounds (사용자 사운드 2026-08-10): the BGM loops across both arena scenes, the
             // three SFX play from the shared hooks. The ESC menu reuses the picker's X art.
-            WireAudioClip(controller, "_bgmClip", "Assets/Sound/bgm/Untitled.mp3");
+            WireAudioClip(controller, "_bgmClip", "Assets/Sound/bgm/BGM_Battle.mp3"); // 사용자 개명 2026-08-10
             WireAudioClip(controller, "_sfxStoneImpact", "Assets/Sound/SFX/stone_impact.wav");
             WireAudioClip(controller, "_sfxBuffLand", "Assets/Sound/SFX/get_stats.wav");
             WireAudioClip(controller, "_sfxHit", "Assets/Sound/SFX/hitted.wav");
@@ -272,6 +272,7 @@ namespace Puckmite.EditorTools
 
             SetOptionalSprite(controller, "_backgroundSprite", backgroundPath);
             SetOptionalSprite(controller, "_buttonSprite", "Assets/Art/Sprites/UI/btn_title");
+            WireAudioClip(controller, "_bgmClip", "Assets/Sound/bgm/BGM_Title.mp3"); // 사용자 지정 2026-08-10
             if (wireHero)
             {
                 GameObject heroArt = AssetDatabase.LoadAssetAtPath<GameObject>(HeroArtPath);
@@ -315,6 +316,7 @@ namespace Puckmite.EditorTools
             }
 
             SetReference(controller, "_tuning", tuning);
+            WireAudioClip(controller, "_bgmClip", "Assets/Sound/bgm/BGM_Title.mp3"); // 사용자 지정 2026-08-10
             SetOptionalSprite(controller, "_backgroundSprite", "Assets/Art/Sprites/UI/screen_title");
             SetOptionalSprite(controller, "_startButtonSprite", "Assets/Art/Sprites/UI/btn_start");
             SetOptionalSprite(controller, "_closeButtonSprite", "Assets/Art/Sprites/UI/btn_close");

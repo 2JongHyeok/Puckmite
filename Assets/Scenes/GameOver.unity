@@ -243,6 +243,7 @@ MonoBehaviour:
   _backgroundSprite: {fileID: 8042343170845037880, guid: 9188ed3c52d1e2b488f0d4f9428a9676, type: 3}
   _heroBodyPrefab: {fileID: 0}
   _buttonSprite: {fileID: -8660165384256758582, guid: bd9db6fb5feed3f46bbd95de9f7d1355, type: 3}
+  _bgmClip: {fileID: 8300000, guid: c7d37c1257021e240843f6f106c4e3ca, type: 3}
 --- !u!4 &470066558
 Transform:
   m_ObjectHideFlags: 0

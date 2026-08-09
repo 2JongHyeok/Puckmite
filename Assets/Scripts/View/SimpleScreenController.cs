@@ -27,6 +27,7 @@ namespace Puckmite.View
         [SerializeField] private Sprite _backgroundSprite;
         [SerializeField] private GameObject _heroBodyPrefab;
         [SerializeField] private Sprite _buttonSprite;
+        [SerializeField] private AudioClip _bgmClip; // Sound/bgm/BGM_Title.mp3 (사용자 지정 2026-08-10)
 
         private Camera _camera;
         private SpriteRenderer _buttonOutline;
@@ -43,6 +44,7 @@ namespace Puckmite.View
 
         private void Awake()
         {
+            GameAudio.PlayBgm(_bgmClip);
             _camera = Camera.main;
             if (_camera == null)
             {

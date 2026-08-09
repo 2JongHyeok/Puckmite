@@ -241,6 +241,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Puckmite.View.TitleController
   _tuning: {fileID: 11400000, guid: dba168e68fa84464d81f3c3288574921, type: 2}
+  _bgmClip: {fileID: 8300000, guid: c7d37c1257021e240843f6f106c4e3ca, type: 3}
   _backgroundSprite: {fileID: 468474139002670839, guid: e6d366820df98a74b910fd71947b2be1, type: 3}
   _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
   _startButtonSprite: {fileID: -7841028581932731570, guid: 1bbdd08bfe90d0248b0f09c2189b11e2, type: 3}

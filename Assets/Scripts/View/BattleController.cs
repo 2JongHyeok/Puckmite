@@ -1022,6 +1022,7 @@ namespace Puckmite.View
         }
 
         // Every stone on the board loses 1 health; any at 0 is destroyed and returns to its owner's hand.
+        // The survivors blink and the hit clip plays once for the volley (사용자 지정 2026-08-10).
         private void CastDamageAll()
         {
             _settleIds.Clear();
@@ -1031,6 +1032,7 @@ namespace Puckmite.View
                 _settleIds.Add(pucks[i].Id);
             }
 
+            bool anyStruck = false;
             for (int i = 0; i < _settleIds.Count; i++)
             {
                 if (!_sim.TryGetPuck(_settleIds[i], out Puck p))
@@ -1038,6 +1040,7 @@ namespace Puckmite.View
                     continue;
                 }
 
+                anyStruck = true;
                 if (p.Health <= 1)
                 {
                     _sim.RemovePuck(p.Id);
@@ -1046,9 +1049,14 @@ namespace Puckmite.View
                 else
                 {
                     _sim.SetHealth(p.Id, p.Health - 1);
+                    FlashPuck(p.Id);
                 }
             }
 
+            if (anyStruck)
+            {
+                GameAudio.PlaySfx(_sfxHit, HitGain);
+            }
         }
 
         // --- Enemy AI (continued) --------------------------------------------------------------------

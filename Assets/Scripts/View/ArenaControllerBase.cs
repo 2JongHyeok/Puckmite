@@ -315,8 +315,7 @@ namespace Puckmite.View
             if (pressed && hoverMenu)
             {
                 SetPauseMenuOpen(false); // restores timeScale before the scene goes
-                GameAudio.StopBgm();     // the title stays silent
-                OnPauseMainMenu();
+                OnPauseMainMenu();       // the title swaps in its own BGM on arrival
                 return;
             }
 
@@ -1278,6 +1277,7 @@ namespace Puckmite.View
             _xpFillRenderers = new MeshRenderer[slots];
             _xpFillMeshes = new Mesh[slots];
             _xpFillFraction = new float[slots];
+            _puckFlashUntil = new float[slots];
             for (int i = 0; i < roster.Count; i++)
             {
                 Puck p = roster[i];
@@ -1578,6 +1578,20 @@ namespace Puckmite.View
 
         // --- Per-frame puck rendering -------------------------------------------------------------
 
+        // Stone hit blink (사용자 지정 2026-08-10): a stone struck by the boss's all-damage cast winks
+        // visible/invisible for a beat — the character treatment at stone scale.
+        private float[] _puckFlashUntil;
+        private const float PuckFlashDuration = 0.48f;
+        private const float PuckFlashInterval = 0.08f;
+
+        protected void FlashPuck(int id)
+        {
+            if (_puckFlashUntil != null && id >= 0 && id < _puckFlashUntil.Length)
+            {
+                _puckFlashUntil[id] = Time.time + PuckFlashDuration;
+            }
+        }
+
         protected void UpdatePuckTransforms()
         {
             // Hide every puck and its arcs, then show only those still alive in the sim. Destroyed pucks
@@ -1598,6 +1612,12 @@ namespace Puckmite.View
             for (int i = 0; i < pucks.Count; i++)
             {
                 Puck p = pucks[i];
+                if (_puckFlashUntil != null && Time.time < _puckFlashUntil[p.Id]
+                    && Mathf.FloorToInt((_puckFlashUntil[p.Id] - Time.time) / PuckFlashInterval) % 2 == 1)
+                {
+                    continue; // hit blink: the stone winks out this beat, arcs and all
+                }
+
                 SpriteRenderer sr = _puckViews[p.Id];
                 sr.enabled = true;
                 float diameter = p.Radius * 2f;

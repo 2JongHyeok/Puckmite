@@ -51,8 +51,10 @@ namespace Puckmite.View
             }
         }
 
-        /// <summary>Starts (or keeps) the looping BGM — scene loads call this every time, and an already
-        /// playing identical clip just carries on, so the music never hitches between battle and shop.</summary>
+        /// <summary>Starts (or keeps) the looping BGM. Every scene asks for its own track on load
+        /// (사용자 지정 2026-08-10: 타이틀·클리어·게임오버 = BGM_Title, 전투·상점 = BGM_Battle) — an
+        /// already playing identical clip just carries on, so battle⇄shop never hitches, and a
+        /// different clip switches over.</summary>
         public static void PlayBgm(AudioClip clip)
         {
             if (clip == null)
@@ -70,13 +72,6 @@ namespace Puckmite.View
             _bgm.loop = true;
             _bgm.volume = _bgmVolume * BgmBaseGain;
             _bgm.Play();
-        }
-
-        /// <summary>The title stays silent (사용자 방향 미정) — leaving to the main menu stops the music.</summary>
-        public static void StopBgm()
-        {
-            Ensure();
-            _bgm.Stop();
         }
 
         public static void PlaySfx(AudioClip clip, float gain)

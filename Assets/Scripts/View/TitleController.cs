@@ -40,6 +40,7 @@ namespace Puckmite.View
         private static readonly Color ButtonTint = new Color(0.28f, 0.33f, 0.44f, 1f); // art-less fallback
 
         [SerializeField] private GameTuning _tuning;            // the difficulty pick writes AiDifficulty
+        [SerializeField] private AudioClip _bgmClip;            // Sound/bgm/BGM_Title.mp3 (사용자 지정 2026-08-10)
         [SerializeField] private Sprite _backgroundSprite;      // promised: UI/title_background (logo baked, 문구 없음)
         [SerializeField] private GameObject _heroBodyPrefab;    // Characters/Hero.aseprite prefab
         [SerializeField] private Sprite _startButtonSprite;     // UI/btn_start
@@ -62,6 +63,7 @@ namespace Puckmite.View
 
         private void Awake()
         {
+            GameAudio.PlayBgm(_bgmClip);
             BuildCamera();
             BuildBackdrop();
             BuildStartButton();

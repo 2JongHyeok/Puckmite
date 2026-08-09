@@ -267,7 +267,7 @@ MonoBehaviour:
   _cellRunHealSprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellDamageSprite: {fileID: -928380179603270380, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellEmptySprite: {fileID: -3083967269285103066, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
-  _bgmClip: {fileID: 8300000, guid: 95b03139689a5f1459588fcb814d9487, type: 3}
+  _bgmClip: {fileID: 8300000, guid: ee8f22d9e8dd12e44987c6198663510b, type: 3}
   _sfxStoneImpact: {fileID: 8300000, guid: 888a86f06235a82488a1bcf0749f5564, type: 3}
   _sfxBuffLand: {fileID: 8300000, guid: 57a463cfb8d87034cb42e5502500c33c, type: 3}
   _sfxHit: {fileID: 8300000, guid: dd7732743d1b3f345b6bcfe02e37d68f, type: 3}
