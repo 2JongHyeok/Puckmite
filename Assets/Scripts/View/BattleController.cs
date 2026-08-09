@@ -813,7 +813,7 @@ namespace Puckmite.View
 
             if (_aiming && TryGetAimedPosition(out Vector2 aimPosition))
             {
-                Vector2 drag = PullbackDrag(aimPosition, world);
+                Vector2 drag = LaunchDrag(aimPosition, world);
                 _launchReady = drag.magnitude >= MinDrag && !(IsAimingGhost() && _ghostBlocked);
                 if (_launchReady)
                 {
@@ -839,7 +839,7 @@ namespace Puckmite.View
 
                 if (hasPosition && !blocked)
                 {
-                    Vector2 drag = PullbackDrag(releasePosition, world);
+                    Vector2 drag = LaunchDrag(releasePosition, world);
                     if (drag.magnitude >= MinDrag)
                     {
                         float power = _tuning.MaxPower * DragToPowerFraction(drag.magnitude);

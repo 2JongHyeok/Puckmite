@@ -747,11 +747,10 @@ namespace Puckmite.View
             return _tuning.PuckRadius * RingRadiusScale;
         }
 
-        // Aiming (EXPERIMENT, 2026-08-06): the stone flies where the cursor is dragged — the launch vector
-        // points from the stone to the cursor, its length the drag distance. The original pull-back scheme
-        // was the reverse (`puckPosition - cursor`); flip this one line to go back. If this sticks, rename
-        // the method (the "pull-back" name is now a lie) and update the doc/memory rule.
-        protected static Vector2 PullbackDrag(Vector2 puckPosition, Vector2 cursor)
+        // Aiming (사용자 확정 2026-08-09): the stone flies where the cursor is dragged — the launch vector
+        // points from the stone to the cursor, its length the drag distance. A pull-back scheme
+        // (`puckPosition - cursor`) was trialled twice and rejected; this line is the direction switch.
+        protected static Vector2 LaunchDrag(Vector2 puckPosition, Vector2 cursor)
         {
             return cursor - puckPosition;
         }

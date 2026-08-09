@@ -47,7 +47,6 @@ namespace Puckmite.View
         private readonly SpriteRenderer _rerollOutline;
         private readonly SpriteRenderer _rerollBg;
         private readonly TextMeshPro _rerollCost;
-        private readonly TextMeshPro _goldText;
         private readonly Slot[] _slots;
         private readonly bool _rerollUsesArt;
 
@@ -58,7 +57,7 @@ namespace Puckmite.View
         /// tooltip reads this.</summary>
         public int HoveredSlot => _hoveredSlot;
 
-        public MerchantPanel(Transform parent, int slotCount, Sprite panelArt, Sprite closeArt, Sprite rerollArt, Sprite goldPanelArt)
+        public MerchantPanel(Transform parent, int slotCount, Sprite panelArt, Sprite closeArt, Sprite rerollArt)
         {
             _root = new GameObject("MerchantPanel");
             _root.transform.SetParent(parent, false);
@@ -67,18 +66,12 @@ namespace Puckmite.View
             MakeRect(_root.transform, "PanelBg", panelArt, Vector2.zero, PanelSize,
                 panelArt != null ? Color.white : PanelTint, 20);
 
-            // Close X in the frame's top-right corner (mock position).
+            // Close X in the frame's top-right corner (mock position). Gold moved out to the shop's
+            // always-visible signpost readout (사용자 지정 2026-08-09).
             _closeOutline = MakeRect(_root.transform, "CloseOutline", null, new Vector2(16.1f, 7.9f), new Vector2(3.0f, 3.0f), OutlineTint, 21);
             _closeOutline.enabled = false;
             _closeBg = MakeRect(_root.transform, "CloseBg", closeArt, new Vector2(16.1f, 7.9f), new Vector2(2.6f, 2.6f),
                 closeArt != null ? Color.white : new Color(0.62f, 0.18f, 0.22f), 22);
-
-            // Gold readout, just left of the X with a small gap (사용자 지정).
-            MakeRect(_root.transform, "GoldPanelBg", goldPanelArt, new Vector2(11.65f, 7.9f), new Vector2(5.6f, 2.6f),
-                goldPanelArt != null ? Color.white : ButtonTint, 22);
-            _goldText = MakeText(_root.transform, "GoldText", "0G", new Vector2(11.65f, 7.85f), new Vector2(4.9f, 1.9f),
-                TextAlignmentOptions.Center, 5f, 23);
-            _goldText.color = GoldTextColor;
 
             // Reroll bar under the X: icon on the art's left, the cost written in its empty right half.
             _rerollUsesArt = rerollArt != null;
@@ -86,8 +79,8 @@ namespace Puckmite.View
             _rerollOutline.enabled = false;
             _rerollBg = MakeRect(_root.transform, "RerollBg", rerollArt, new Vector2(13.3f, 4.7f), new Vector2(5.6f, 2.6f),
                 _rerollUsesArt ? Color.white : ButtonTint, 22);
-            _rerollCost = MakeText(_root.transform, "RerollCost", "0G", new Vector2(14.0f, 4.65f), new Vector2(3.6f, 1.9f),
-                TextAlignmentOptions.Center, 5f, 23);
+            _rerollCost = MakeText(_root.transform, "RerollCost", "0G", new Vector2(14.0f, 4.65f), new Vector2(3.8f, 2.3f),
+                TextAlignmentOptions.Center, 10f, 23);
 
             // The three offer cards: cell-sheet faces the controller feeds in, price under each.
             _slots = new Slot[slotCount];
@@ -102,11 +95,11 @@ namespace Puckmite.View
                 slot.Outline.enabled = false;
                 slot.Face = MakeRect(group.transform, "Face", null, Vector2.zero, new Vector2(5f, 5f), Color.white, 22);
                 slot.Face.enabled = false;
-                slot.Overlay = MakeText(group.transform, "Overlay", "", Vector2.zero, new Vector2(4.6f, 4.6f),
-                    TextAlignmentOptions.Center, 5f, 23);
+                slot.Overlay = MakeText(group.transform, "Overlay", "", Vector2.zero, new Vector2(4.7f, 4.7f),
+                    TextAlignmentOptions.Center, 10f, 23);
                 slot.Overlay.gameObject.SetActive(false);
-                slot.Price = MakeText(group.transform, "Price", "", new Vector2(0f, -3.4f), new Vector2(4.6f, 1.3f),
-                    TextAlignmentOptions.Center, 5f, 23);
+                slot.Price = MakeText(group.transform, "Price", "", new Vector2(0f, -3.8f), new Vector2(6.5f, 2.4f),
+                    TextAlignmentOptions.Center, 10f, 23);
                 _slots[i] = slot;
             }
 
@@ -129,11 +122,6 @@ namespace Puckmite.View
             }
 
             _hoveredSlot = -1;
-        }
-
-        public void SetGold(int gold)
-        {
-            SetText(_goldText, gold + "G");
         }
 
         public void SetReroll(int price, bool affordable)

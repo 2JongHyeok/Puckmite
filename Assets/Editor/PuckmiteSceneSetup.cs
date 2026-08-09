@@ -179,12 +179,34 @@ namespace Puckmite.EditorTools
                     SetReference(controller, "_merchantBodyPrefab", peddlerArt);
                 }
 
+                // The campfire standing beside him (사용자 지정 2026-08-09: peddler와 분리된 아트).
+                GameObject campfireArt = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Art/Sprites/UI/campfire.aseprite");
+                if (campfireArt != null)
+                {
+                    SetReference(controller, "_campfirePrefab", campfireArt);
+                }
+
                 // The buying panel's pieces (user mock 2026-08-09); the panel renders flat placeholder
                 // rects for any that are still missing.
                 SetOptionalSprite(controller, "_shopPanelSprite", "Assets/Art/Sprites/UI/shop_panel");
                 SetOptionalSprite(controller, "_rerollButtonSprite", "Assets/Art/Sprites/UI/btn_reroll");
                 SetOptionalSprite(controller, "_closeButtonSprite", "Assets/Art/Sprites/UI/btn_close");
                 SetOptionalSprite(controller, "_goldPanelSprite", "Assets/Art/Sprites/UI/Gold_pannel");
+
+                // The right-of-board column (사용자 지정 2026-08-09): the remaining-stones panel and the
+                // roll / buy-stone / leave buttons, plus the stat sheet's stone pebble for the count.
+                SetOptionalSprite(controller, "_stonePanelSprite", "Assets/Art/Sprites/UI/panel_stone_count_1");
+                SetOptionalSprite(controller, "_rollButtonSprite", "Assets/Art/Sprites/UI/btn_shop_roll");
+                SetOptionalSprite(controller, "_buyStoneButtonSprite", "Assets/Art/Sprites/UI/btn_shop_buy_stone");
+                SetOptionalSprite(controller, "_leaveButtonSprite", "Assets/Art/Sprites/UI/btn_shop_leave");
+                foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(StatIconSheetPath))
+                {
+                    if (asset is Sprite stoneIcon && stoneIcon.name == "Frame_3")
+                    {
+                        SetReference(controller, "_stoneIconSprite", stoneIcon);
+                        break;
+                    }
+                }
             }
 
             EditorSceneManager.SaveScene(scene, path);

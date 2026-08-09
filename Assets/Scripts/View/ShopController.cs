@@ -21,9 +21,15 @@ namespace Puckmite.View
         private const float MerchantRadius = 2.2f;
         // Standing on the backdrop's grass line, by the campfire (user mock 2026-08-09).
         private const float MerchantY = CharFeetY + MerchantRadius;
-        // Peddler art: the battle characters' pixel scale (their CharArtScale), so the merchant shares
-        // the grid. The label floats over the head and bobs gently to advertise the click (사용자 지정).
-        private const float MerchantArtScale = 7.9f;
+        // Peddler art at twice the battle characters' pixel scale (사용자 지정 2026-08-09: 2배), the
+        // campfire art at four times, standing to his right. The label floats over the head and bobs
+        // gently to advertise the click.
+        private const float MerchantArtScale = 15.8f;
+        private const float CampfireArtScale = 31.6f;
+        private const float CampfireX = -10f;
+        // The lantern in his right hand widens the sprite bounds, so the bounds centre sits right of the
+        // head — this nudge parks the label over the head itself (사용자 지정: 머리 위로).
+        private const float MerchantLabelOffsetX = -0.7f;
         private const float LabelBobAmplitude = 0.3f;
         private const float LabelBobSpeed = 2.4f; // radians/sec
 
@@ -48,6 +54,7 @@ namespace Puckmite.View
         // the floating "상점 열기" label. The click/hover disc comes from the art bounds, like the battle
         // characters', or from the placeholder circle's constants.
         [SerializeField] private GameObject _merchantBodyPrefab; // Peddler.aseprite prefab, wired by Setup
+        [SerializeField] private GameObject _campfirePrefab;     // UI/campfire.aseprite prefab, wired by Setup
         private SpriteRenderer[] _merchantOutline;
         private GameObject _merchantLabelRoot;
         private float _merchantLabelBaseY;
@@ -61,6 +68,31 @@ namespace Puckmite.View
         [SerializeField] private Sprite _closeButtonSprite;
         [SerializeField] private Sprite _goldPanelSprite;
         private MerchantPanel _merchantPanel;
+
+        // The right-of-board column (사용자 지정 2026-08-09): the remaining-stones panel — the stone icon
+        // and count in its space under the title — then the roll / buy-stone / leave buttons, replacing
+        // the old IMGUI corner controls. Same hover-outline and dim language as everywhere else.
+        [SerializeField] private Sprite _stonePanelSprite;      // UI/panel_stone_count_1
+        [SerializeField] private Sprite _rollButtonSprite;      // UI/btn_shop_roll
+        [SerializeField] private Sprite _buyStoneButtonSprite;  // UI/btn_shop_buy_stone
+        [SerializeField] private Sprite _leaveButtonSprite;     // UI/btn_shop_leave
+        [SerializeField] private Sprite _stoneIconSprite;       // stat sheet Frame_3, the stone pebble
+        private const float SideX = 22.5f;                      // column centre, right of the board wall
+        private static readonly Color SideOutlineTint = new Color(1f, 0.9f, 0.25f, 0.9f);
+        private static readonly Color SideDimmed = new Color(1f, 1f, 1f, 0.45f);
+        private GameObject _sideRoot;
+        private TextMeshPro _stoneCountText;
+        private SpriteRenderer _rollOutline;
+        private SpriteRenderer _rollBg;
+        private SpriteRenderer _buyOutline;
+        private SpriteRenderer _buyBg;
+        private TextMeshPro _buyPriceText;
+        private SpriteRenderer _leaveOutline;
+        private SpriteRenderer _leaveBg;
+
+        // The always-visible gold readout on the backdrop's signpost, right of it on the field
+        // (사용자 지정 2026-08-09) — the buying panel does not cover it, so it never disappears.
+        private TextMeshPro _goldReadoutText;
 
         // One merchant slot: an upgrade cell, or (rarely) a battle stone in the same slot (design doc 5.3).
         private enum OfferType
@@ -84,7 +116,6 @@ namespace Puckmite.View
         private bool _hasPendingCell;        // a bought cell is riding the cursor, waiting to be placed
         private UpgradeKind _pendingCell;
         private int _pendingSlot = -1;
-        private string _shopLog = "";
 
         // Replace warning (design doc 5.1): a different kind wipes the cell's levels, so the placement
         // waits here for OK/cancel instead of landing straight away.
@@ -93,8 +124,11 @@ namespace Puckmite.View
         private int _confirmRow;
 
         // The view arrays are sized once per Build and never grow (see ArenaControllerBase), so the roster
-        // is pre-sized for every stone this visit could possibly field: the granted ones plus as many as
-        // the entry gold could buy. Gold cannot rise inside a shop, so this is a hard upper bound.
+        // is pre-sized for every stone this visit could possibly field: the granted ones plus a fixed
+        // headroom of buys. A fixed number rather than entry gold (사용자 발견 2026-08-09): capacity
+        // derived from entry gold froze the buy button for the whole visit when gold arrived later
+        // (debug +10000), because the arrays could not grow to match it.
+        private const int MaxStoneBuysPerVisit = 10;
         private int _stoneCapacity;
 
         private static CampaignState Campaign => GameFlow.Campaign;
@@ -109,8 +143,7 @@ namespace Puckmite.View
             {
                 _shopStonesTotal = Mathf.Max(1, _tuning.ShopStonesPerVisit);
                 _shopStonesLeft = _shopStonesTotal;
-                _stoneCapacity = _shopStonesTotal + Campaign.Gold / Mathf.Max(1, _tuning.ShopStonePrice);
-                _shopLog = "";
+                _stoneCapacity = _shopStonesTotal + MaxStoneBuysPerVisit;
                 RerollOffers();
             }
 
@@ -142,19 +175,19 @@ namespace Puckmite.View
             return roster;
         }
 
-        // The throw always comes off the bottom wall, so the cursor's x is what slides along it (design doc
-        // 5.2; the entry edge differs from battle because the merchant stands on the left).
+        // The throw comes off the left wall (사용자 지정 2026-08-09 — the right side now holds the shop
+        // controls), so the cursor's y is what slides along it.
         protected override Vector2 EntryPoint(int actor, float along)
         {
             float inset = _tuning.PuckRadius * RingRadiusScale;
-            float minX = _sim.BoardMin.x + inset;
-            float maxX = _sim.BoardMax.x - inset;
-            return new Vector2(Mathf.Clamp(along, minX, maxX), _sim.BoardMin.y + inset);
+            float minY = _sim.BoardMin.y + inset;
+            float maxY = _sim.BoardMax.y - inset;
+            return new Vector2(_sim.BoardMin.x + inset, Mathf.Clamp(along, minY, maxY));
         }
 
         protected override float EntryAlong(Vector2 world)
         {
-            return world.x;
+            return world.y;
         }
 
         // The shop is the player alone (design doc 5.4).
@@ -165,8 +198,8 @@ namespace Puckmite.View
 
         protected override void EntryAxisBounds(out float min, out float max)
         {
-            min = _sim.BoardMin.x;
-            max = _sim.BoardMax.x;
+            min = _sim.BoardMin.y;
+            max = _sim.BoardMax.y;
         }
 
         protected override void Update()
@@ -180,6 +213,7 @@ namespace Puckmite.View
             UpdateShopCells();
             UpdateMerchantHighlight();
             UpdateMerchantPanel();
+            UpdateShopSideUi();
             UpdateGhost();
         }
 
@@ -370,7 +404,6 @@ namespace Puckmite.View
             Campaign.Gold -= _tuning.BattleStonePrice;
             Campaign.ExtraBattleStones++;
             _shopOffers[slot] = null; // that slot is spent until a reroll
-            _shopLog = "Battle stone bought — one more stone from the next run.";
         }
 
         // An extra stone for this visit only (design doc 5.4): paid, straight into the hand, and up onto
@@ -389,7 +422,6 @@ namespace Puckmite.View
             _shopStonesTotal++;
             _shopStonesLeft++;
             _handReady[0].Add(id);
-            _shopLog = "Stone bought for this visit.";
 
             if (_shopThrowing && !_ghostActive)
             {
@@ -428,7 +460,7 @@ namespace Puckmite.View
                 return;
             }
 
-            ShopPlacement result = Campaign.ShopBoard.Place(col, row, _pendingCell);
+            Campaign.ShopBoard.Place(col, row, _pendingCell);
             Campaign.Gold -= price;
             if (_pendingSlot >= 0 && _pendingSlot < _shopOffers.Count)
             {
@@ -437,14 +469,6 @@ namespace Puckmite.View
 
             _hasPendingCell = false;
             _pendingSlot = -1;
-            ShopCell landed = Campaign.ShopBoard.CellAt(col, row);
-            _shopLog = result == ShopPlacement.Upgraded
-                ? (landed.Xp == 0
-                    ? $"{UpgradeName(_pendingCell)} cell upgraded to level {landed.Level}."
-                    : $"{UpgradeName(_pendingCell)} cell XP {landed.Xp}/{ShopBoard.XpPerLevel}.")
-                : result == ShopPlacement.Replaced
-                    ? $"Cell replaced with {UpgradeName(_pendingCell)} (previous levels lost)."
-                    : $"{UpgradeName(_pendingCell)} cell placed.";
         }
 
         // Committing to the throwing phase: the merchant leaves, so no more cells can be bought
@@ -556,10 +580,12 @@ namespace Puckmite.View
             // Faint at rest ("this is clickable"), bright under the cursor — the battle characters' language.
             _merchantOutline = BuildCharacterOutline(_merchantView);
             BuildMerchantLabel();
+            TryBuildCampfire();
+            BuildGoldReadout();
 
             // The buying panel, hidden until the merchant is clicked (user mock 2026-08-09).
             _merchantPanel = new MerchantPanel(transform, ShopOfferSlots,
-                _shopPanelSprite, _closeButtonSprite, _rerollButtonSprite, _goldPanelSprite);
+                _shopPanelSprite, _closeButtonSprite, _rerollButtonSprite);
             _merchantPanel.CloseClicked = () => _merchantOpen = false;
             _merchantPanel.RerollClicked = TryReroll;
             _merchantPanel.SlotClicked = OnMerchantSlotClicked;
@@ -572,7 +598,7 @@ namespace Puckmite.View
             _pendingCellGhost.sortingOrder = 4;
             _pendingCellGhost.enabled = false;
 
-            MakeInfoBox("ShopBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = "상점";
+            BuildShopSideUi();
         }
 
         // One bought cell's stack gauge and level sparkles: the ticks along the bottom fill with each
@@ -661,6 +687,44 @@ namespace Puckmite.View
             return sr;
         }
 
+        // The campfire art beside the peddler (사용자 지정: 그의 오른쪽, 4배 배율), its base sitting on
+        // the same grass line, aligned by bounds like every character.
+        private void TryBuildCampfire()
+        {
+            if (_campfirePrefab == null)
+            {
+                return;
+            }
+
+            GameObject go = Instantiate(_campfirePrefab, transform, false);
+            go.name = "Campfire";
+            SpriteRenderer sr = go.GetComponentInChildren<SpriteRenderer>();
+            if (sr == null || sr.sprite == null)
+            {
+                Destroy(go);
+                return;
+            }
+
+            sr.sortingOrder = 11;
+            sr.color = Color.white;
+            go.transform.localPosition = new Vector3(CampfireX, CharFeetY, 0f);
+            go.transform.localScale *= CampfireArtScale;
+            float height = sr.bounds.size.y;
+            Vector3 target = transform.TransformPoint(new Vector3(CampfireX, CharFeetY + height * 0.5f, 0f));
+            go.transform.position += target - sr.bounds.center;
+        }
+
+        // The always-visible gold readout: the gold panel art parked right of the backdrop's signpost,
+        // its base on the field line (사용자 지정), refreshed every frame in UpdateShopSideUi.
+        private void BuildGoldReadout()
+        {
+            SideRect(transform, "GoldReadoutBg", _goldPanelSprite, new Vector2(31.3f, 15.35f), new Vector2(8.4f, 3.9f),
+                _goldPanelSprite != null ? Color.white : new Color(0.28f, 0.33f, 0.44f), 15);
+            _goldReadoutText = SideText(transform, "GoldReadoutText", "0G", new Vector2(31.3f, 15.3f),
+                new Vector2(7.2f, 3.0f), TextAlignmentOptions.Center, 10f, 16);
+            _goldReadoutText.color = new Color(1f, 0.823f, 0.29f);
+        }
+
         // "상점 열기" floats over the merchant's head — plain Korean text, no box — telling what the
         // click does. UpdateMerchantHighlight bobs it.
         private void BuildMerchantLabel()
@@ -676,13 +740,13 @@ namespace Puckmite.View
 
             tmp.text = "상점 열기";
             tmp.alignment = TextAlignmentOptions.Center;
-            tmp.fontSize = 6f;
-            tmp.rectTransform.sizeDelta = new Vector2(8f, 2f);
+            tmp.fontSize = 12f; // 사용자 지정 2026-08-09: 상점 텍스트 2배
+            tmp.rectTransform.sizeDelta = new Vector2(14f, 3.5f);
             tmp.color = new Color(1f, 0.92f, 0.55f); // warm, toward the highlight yellow
             tmp.GetComponent<MeshRenderer>().sortingOrder = 15;
 
             _merchantLabelBaseY = _merchantView.bounds.max.y + 1.1f;
-            _merchantLabelRoot.transform.localPosition = new Vector3(MerchantX, _merchantLabelBaseY, 0f);
+            _merchantLabelRoot.transform.localPosition = new Vector3(MerchantX + MerchantLabelOffsetX, _merchantLabelBaseY, 0f);
         }
 
         // Merchant affordances, per frame: the label bobs over the head, the outline sits faint ("this
@@ -704,7 +768,7 @@ namespace Puckmite.View
             }
 
             float bob = Mathf.Sin(Time.time * LabelBobSpeed) * LabelBobAmplitude;
-            _merchantLabelRoot.transform.localPosition = new Vector3(MerchantX, _merchantLabelBaseY + bob, 0f);
+            _merchantLabelRoot.transform.localPosition = new Vector3(MerchantX + MerchantLabelOffsetX, _merchantLabelBaseY + bob, 0f);
 
             bool hovered = false;
             Mouse mouse = Mouse.current;
@@ -744,7 +808,6 @@ namespace Puckmite.View
             }
 
             _merchantPanel.Show();
-            _merchantPanel.SetGold(Campaign.Gold);
             int rerollPrice = RerollPrice();
             _merchantPanel.SetReroll(rerollPrice, Campaign.Gold >= rerollPrice);
 
@@ -780,7 +843,164 @@ namespace Puckmite.View
             _merchantPanel.Tick(ScreenToWorld(screen), mouse.leftButton.wasPressedThisFrame, PointerOverShopGui(screen));
         }
 
-        // Every shop stone starts in hand and comes in off the bottom wall.
+        // The right-of-board column: the remaining-stones panel with the stone icon and count in the
+        // space under its baked title, then the roll / buy-stone / leave buttons (사용자 지정).
+        private void BuildShopSideUi()
+        {
+            _sideRoot = new GameObject("ShopSideUi");
+            _sideRoot.transform.SetParent(transform, false);
+            Transform root = _sideRoot.transform;
+
+            SideRect(root, "StonePanel", _stonePanelSprite, new Vector2(SideX, 9.4f), new Vector2(15f, 4.6f),
+                _stonePanelSprite != null ? Color.white : new Color(0.14f, 0.17f, 0.24f, 0.9f), 15);
+            SideRect(root, "StoneIcon", _stoneIconSprite != null ? _stoneIconSprite : ProceduralSprites.Circle(),
+                new Vector2(SideX - 2.6f, 8.65f), new Vector2(1.9f, 1.9f),
+                _stoneIconSprite != null ? Color.white : new Color(0.92f, 0.92f, 0.95f), 16);
+            _stoneCountText = SideText(root, "StoneCount", "x 0", new Vector2(SideX + 2.2f, 8.6f),
+                new Vector2(7f, 2.7f), TextAlignmentOptions.MidlineLeft, 14f, 16);
+
+            _rollOutline = SideRect(root, "RollOutline", null, new Vector2(SideX, 4.6f), new Vector2(17.5f, 4.3f), SideOutlineTint, 15);
+            _rollOutline.enabled = false;
+            _rollBg = SideRect(root, "RollButton", _rollButtonSprite, new Vector2(SideX, 4.6f), new Vector2(17f, 3.8f),
+                _rollButtonSprite != null ? Color.white : new Color(0.28f, 0.33f, 0.44f), 16);
+
+            _buyOutline = SideRect(root, "BuyOutline", null, new Vector2(SideX, 0.2f), new Vector2(17.5f, 4.3f), SideOutlineTint, 15);
+            _buyOutline.enabled = false;
+            _buyBg = SideRect(root, "BuyButton", _buyStoneButtonSprite, new Vector2(SideX, 0.2f), new Vector2(17f, 3.8f),
+                _buyStoneButtonSprite != null ? Color.white : new Color(0.28f, 0.33f, 0.44f), 16);
+            _buyPriceText = SideText(root, "BuyPrice", "0G", new Vector2(SideX, -2.4f),
+                new Vector2(8f, 2.6f), TextAlignmentOptions.Center, 10f, 16);
+
+            _leaveOutline = SideRect(root, "LeaveOutline", null, new Vector2(SideX, -6.3f), new Vector2(17.5f, 4.3f), SideOutlineTint, 15);
+            _leaveOutline.enabled = false;
+            _leaveBg = SideRect(root, "LeaveButton", _leaveButtonSprite, new Vector2(SideX, -6.3f), new Vector2(17f, 3.8f),
+                _leaveButtonSprite != null ? Color.white : new Color(0.28f, 0.33f, 0.44f), 16);
+        }
+
+        // States, hover and clicks for the side column, every frame. Hidden while a modal screen is up
+        // (the old IMGUI column was simply not drawn then).
+        private void UpdateShopSideUi()
+        {
+            if (_sideRoot == null)
+            {
+                return;
+            }
+
+            // The signpost gold readout stays on through the modals (사용자 지정) — they never cover it.
+            if (_goldReadoutText != null)
+            {
+                _goldReadoutText.text = Campaign.Gold + "G";
+            }
+
+            bool shown = !_merchantOpen && !_confirmReplaceOpen;
+            if (_sideRoot.activeSelf != shown)
+            {
+                _sideRoot.SetActive(shown);
+            }
+
+            if (!shown)
+            {
+                return;
+            }
+
+            _stoneCountText.text = "x " + _shopStonesLeft;
+
+            bool canRoll = !_shopThrowing;
+            bool canBuy = Campaign.Gold >= _tuning.ShopStonePrice && _shopStonesTotal < _stoneCapacity;
+            // Settlement reads where the stones ARE, so leaving mid-flight would freeze them wherever
+            // they happened to be that frame. The way out only opens once the board has settled.
+            bool canLeave = _sim.AllAtRest();
+            _rollBg.color = canRoll ? Color.white : SideDimmed;
+            _buyBg.color = canBuy ? Color.white : SideDimmed;
+            _leaveBg.color = canLeave ? Color.white : SideDimmed;
+            _buyPriceText.text = _tuning.ShopStonePrice + "G";
+            _buyPriceText.color = Campaign.Gold >= _tuning.ShopStonePrice
+                ? new Color(1f, 0.823f, 0.29f)
+                : new Color(1f, 0.353f, 0.29f);
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            bool blocked = PointerOverShopGui(screen);
+            Vector2 world = ScreenToWorld(screen);
+
+            bool hoverRoll = !blocked && canRoll && InBounds(_rollBg, world);
+            bool hoverBuy = !blocked && canBuy && InBounds(_buyBg, world);
+            bool hoverLeave = !blocked && canLeave && InBounds(_leaveBg, world);
+            _rollOutline.enabled = hoverRoll;
+            _buyOutline.enabled = hoverBuy;
+            _leaveOutline.enabled = hoverLeave;
+
+            if (!mouse.leftButton.wasPressedThisFrame)
+            {
+                return;
+            }
+
+            if (hoverRoll)
+            {
+                BeginShopThrowing();
+            }
+            else if (hoverBuy)
+            {
+                BuyStone();
+            }
+            else if (hoverLeave)
+            {
+                LeaveShop();
+            }
+        }
+
+        private static bool InBounds(SpriteRenderer sr, Vector2 world)
+        {
+            Bounds b = sr.bounds;
+            return world.x >= b.min.x && world.x <= b.max.x && world.y >= b.min.y && world.y <= b.max.y;
+        }
+
+        private static SpriteRenderer SideRect(Transform parent, string name, Sprite art, Vector2 pos, Vector2 size, Color tint, int order)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sortingOrder = order;
+            sr.color = tint;
+            sr.sprite = art != null ? art : ProceduralSprites.Unit();
+            Bounds b = sr.sprite.bounds;
+            Vector3 scale = new Vector3(size.x / b.size.x, size.y / b.size.y, 1f);
+            go.transform.localScale = scale;
+            go.transform.localPosition = new Vector3(pos.x - b.center.x * scale.x, pos.y - b.center.y * scale.y, 0f);
+            return sr;
+        }
+
+        private static TextMeshPro SideText(Transform parent, string name, string text, Vector2 pos, Vector2 box,
+            TextAlignmentOptions alignment, float maxSize, int order)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = pos;
+
+            TextMeshPro tmp = go.AddComponent<TextMeshPro>();
+            if (KoreanFont.Asset() != null)
+            {
+                tmp.font = KoreanFont.Asset();
+            }
+
+            tmp.text = text;
+            tmp.alignment = alignment;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 1f;
+            tmp.fontSizeMax = maxSize;
+            tmp.rectTransform.sizeDelta = box;
+            tmp.color = Color.white;
+            tmp.GetComponent<MeshRenderer>().sortingOrder = order;
+            return tmp;
+        }
+
+        // Every shop stone starts in hand and comes in off the left wall.
         private void ResetShopHands()
         {
             _handReady = new List<int>[_actorCount];
@@ -959,7 +1179,7 @@ namespace Puckmite.View
 
             if (_aiming && TryGetAimedPosition(out Vector2 aimPosition))
             {
-                Vector2 drag = PullbackDrag(aimPosition, world);
+                Vector2 drag = LaunchDrag(aimPosition, world);
                 _launchReady = drag.magnitude >= MinDrag && !_ghostBlocked;
                 if (_launchReady)
                 {
@@ -982,7 +1202,7 @@ namespace Puckmite.View
 
                 if (hasPosition && !blocked)
                 {
-                    Vector2 drag = PullbackDrag(releasePosition, world);
+                    Vector2 drag = LaunchDrag(releasePosition, world);
                     if (drag.magnitude >= MinDrag)
                     {
                         LaunchGhost(drag.normalized * (_tuning.MaxPower * DragToPowerFraction(drag.magnitude)));
@@ -1026,22 +1246,10 @@ namespace Puckmite.View
                 return true;
             }
 
-            if (gui.y <= 70f)
-            {
-                return true; // gold, stone count and the log along the top
-            }
-
-            return gui.x >= Screen.width - 200f && gui.y <= 300f; // right-hand control column
+            return gui.y <= 90f; // the pending-cell hint along the top
         }
 
         // --- Shop GUI -----------------------------------------------------------------------------
-
-        // Gold is shown red wherever the player cannot afford the thing next to it.
-        private string GoldTag(int price)
-        {
-            string colour = Campaign.Gold >= price ? "#ffd24a" : "#ff5a4a";
-            return $"<color={colour}>{price}G</color>";
-        }
 
         private void OnGUI()
         {
@@ -1072,52 +1280,13 @@ namespace Puckmite.View
                 return;
             }
 
-            // Gold, top right (design doc 5.6: it carries between shops).
-            GUI.Label(new Rect(Screen.width - 170f, 12f, 160f, 24f), $"<b>Gold {Campaign.Gold}</b>", rich);
-
-            // Stones left this visit, above the board.
-            GUI.Label(new Rect(Screen.width * 0.5f - 80f, 12f, 200f, 24f),
-                $"Stones {_shopStonesLeft} / {_shopStonesTotal}", rich);
-
-            if (_shopLog.Length > 0)
-            {
-                GUI.Label(new Rect(Screen.width * 0.5f - 220f, 38f, 520f, 24f), _shopLog, rich);
-            }
-
-            // Right-hand controls: roll (once, then greyed out but still shown), buy a stone, and leave.
-            float x = Screen.width - 190f;
-            GUI.enabled = !_shopThrowing;
-            if (GUI.Button(new Rect(x, 90f, 170f, 34f), _shopThrowing ? "Rolling…" : "Roll stones"))
-            {
-                BeginShopThrowing();
-            }
-            GUI.enabled = true;
-
-            // An extra stone for this visit (design doc 5.4): always shown, roll phase or not, greyed out
-            // only while it cannot be paid for.
-            GUI.enabled = Campaign.Gold >= _tuning.ShopStonePrice && _shopStonesTotal < _stoneCapacity;
-            if (GUI.Button(new Rect(x, 150f, 170f, 34f), "Add stone"))
-            {
-                BuyStone();
-            }
-            GUI.enabled = true;
-            GUI.Label(new Rect(x + 55f, 186f, 120f, 22f), GoldTag(_tuning.ShopStonePrice), rich);
-
-            // Settlement reads where the stones ARE, so leaving mid-flight would freeze them wherever they
-            // happened to be that frame. The way out only opens once the board has settled.
-            bool settled = _sim.AllAtRest();
-            GUI.enabled = settled;
-            if (GUI.Button(new Rect(x, 210f, 170f, 34f), settled ? "Leave shop" : "Stones rolling…"))
-            {
-                LeaveShop();
-                return;
-            }
-            GUI.enabled = true;
-
+            // Gold lives on the world-space signpost readout now, the stone count and the shop controls
+            // in the world-space side column, and the placement log is gone (사용자 지정); IMGUI keeps
+            // only the pending-cell hint and the tooltips.
             if (_hasPendingCell)
             {
-                GUI.Label(new Rect(x, 254f, 190f, 40f),
-                    $"Placing {UpgradeName(_pendingCell)}\nright-click to cancel", rich);
+                GUI.Label(new Rect(Screen.width * 0.5f - 220f, 38f, 520f, 24f),
+                    $"Placing {UpgradeName(_pendingCell)} — right-click to cancel", rich);
             }
 
             DrawBoardCellTooltip(rich);
