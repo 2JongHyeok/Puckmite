@@ -755,27 +755,34 @@ namespace Puckmite.Sim
             return plan;
         }
 
-        /// <summary>Upgrade-board placement (design doc 5.1): an empty cell takes the cell at level 1, the
-        /// same kind again raises its level, a different kind replaces it and its levels are lost.</summary>
+        /// <summary>Upgrade-board placement (사용자 지정 2026-08-09): an empty cell takes the cell at level
+        /// 1, the same kind again adds one XP — XpPerLevel stacks fill the gauge and raise the level — and
+        /// a different kind replaces it, levels and XP lost.</summary>
         public static CheckResult ShopPlacementCheck()
         {
             ShopBoard board = new ShopBoard();
 
             ShopPlacement first = board.Place(1, 1, UpgradeKind.Attack);
-            bool placed = first == ShopPlacement.Placed && board.CellAt(1, 1).Level == 1 && board.CellAt(1, 1).Kind == UpgradeKind.Attack;
+            bool placed = first == ShopPlacement.Placed && board.CellAt(1, 1).Level == 1
+                && board.CellAt(1, 1).Xp == 0 && board.CellAt(1, 1).Kind == UpgradeKind.Attack;
 
             ShopPlacement second = board.Place(1, 1, UpgradeKind.Attack);
-            bool upgraded = second == ShopPlacement.Upgraded && board.CellAt(1, 1).Level == 2;
+            bool stacked = second == ShopPlacement.Upgraded && board.CellAt(1, 1).Level == 1 && board.CellAt(1, 1).Xp == 1;
+
+            board.Place(1, 1, UpgradeKind.Attack);
+            ShopPlacement fourth = board.Place(1, 1, UpgradeKind.Attack);
+            bool levelled = fourth == ShopPlacement.Upgraded && board.CellAt(1, 1).Level == 2 && board.CellAt(1, 1).Xp == 0;
 
             bool previewWarns = board.Preview(1, 1, UpgradeKind.Shield) == ShopPlacement.Replaced;
 
-            ShopPlacement third = board.Place(1, 1, UpgradeKind.Shield);
-            bool replaced = third == ShopPlacement.Replaced && board.CellAt(1, 1).Level == 1 && board.CellAt(1, 1).Kind == UpgradeKind.Shield;
+            ShopPlacement fifth = board.Place(1, 1, UpgradeKind.Shield);
+            bool replaced = fifth == ShopPlacement.Replaced && board.CellAt(1, 1).Level == 1
+                && board.CellAt(1, 1).Xp == 0 && board.CellAt(1, 1).Kind == UpgradeKind.Shield;
 
             bool othersUntouched = board.CellAt(0, 0).IsEmpty && board.CellAt(2, 2).IsEmpty;
 
-            bool passed = placed && upgraded && previewWarns && replaced && othersUntouched;
-            string detail = $"placed={placed}, upgraded={upgraded}, previewWarns={previewWarns}, replaced={replaced}, othersEmpty={othersUntouched}.";
+            bool passed = placed && stacked && levelled && previewWarns && replaced && othersUntouched;
+            string detail = $"placed={placed}, stacked={stacked}, levelled={levelled}, previewWarns={previewWarns}, replaced={replaced}, othersEmpty={othersUntouched}.";
             return new CheckResult("Shop placement", passed, detail);
         }
 
@@ -787,9 +794,13 @@ namespace Puckmite.Sim
                 new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
             ShopBoard board = new ShopBoard();
 
-            // Centre cell (2,2) at level 2, and the cell right of it (3,2) at level 1.
+            // Centre cell (2,2) at level 2 (one place plus a full XP gauge), and (3,2) at level 1.
             board.Place(2, 2, UpgradeKind.Attack);
-            board.Place(2, 2, UpgradeKind.Attack);
+            for (int stack = 0; stack < ShopBoard.XpPerLevel; stack++)
+            {
+                board.Place(2, 2, UpgradeKind.Attack);
+            }
+
             board.Place(3, 2, UpgradeKind.Shield);
 
             // A level-3 stone dead centre: only cell (2,2) -> attack 2*3 = 6.

@@ -269,6 +269,10 @@ MonoBehaviour:
   _cellEmptySprite: {fileID: -3083967269285103066, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _silhouetteMaterial: {fileID: 2100000, guid: 6734f8c9197b44641b2c935695892126, type: 2}
   _merchantBodyPrefab: {fileID: -2253911629886400664, guid: 0d206ccf48cba264aa95d924c2477f11, type: 3}
+  _shopPanelSprite: {fileID: 3646840235663417176, guid: ad272d6bfee42b9458d63e74d54f9b02, type: 3}
+  _rerollButtonSprite: {fileID: 1049278001472650328, guid: 6528bbacf902aae4399d6a0b4c74533a, type: 3}
+  _closeButtonSprite: {fileID: 2262697476317888842, guid: b97806987a418064f93dfe24d246770c, type: 3}
+  _goldPanelSprite: {fileID: -9142682587584934083, guid: b0f06b69a7a9f9143860519d9fe661b9, type: 3}
 --- !u!4 &1264881507
 Transform:
   m_ObjectHideFlags: 0

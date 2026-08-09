@@ -11,11 +11,13 @@ namespace Puckmite.Sim
         MaxHealth,
     }
 
-    /// <summary>One cell of the upgrade board. Level 0 means empty — a stone resting there does nothing.</summary>
+    /// <summary>One cell of the upgrade board. Level 0 means empty — a stone resting there does nothing.
+    /// Xp counts same-kind placements toward the next level (사용자 지정 2026-08-09).</summary>
     public struct ShopCell
     {
         public UpgradeKind Kind;
         public int Level;
+        public int Xp;
 
         public bool IsEmpty => Level <= 0;
     }
@@ -79,17 +81,33 @@ namespace Puckmite.Sim
             return cell.Kind == kind ? ShopPlacement.Upgraded : ShopPlacement.Replaced;
         }
 
-        /// <summary>Puts a bought cell down. Cells cannot be moved afterwards, only stacked on or replaced.</summary>
+        /// <summary>Same-kind placements that fill a cell's gauge and raise it one level (사용자 지정
+        /// 2026-08-09: 1칸씩 3칸을 채우면 레벨업, 레벨 상한 없음).</summary>
+        public const int XpPerLevel = 3;
+
+        /// <summary>Puts a bought cell down. Cells cannot be moved afterwards — the same kind again adds
+        /// one XP (a full gauge levels the cell up), a different kind replaces it, levels and XP lost.</summary>
         public ShopPlacement Place(int col, int row, UpgradeKind kind)
         {
             ShopPlacement result = Preview(col, row, kind);
             int index = col + row * BoardCells.Size;
 
-            _cells[index] = new ShopCell
+            if (result == ShopPlacement.Upgraded)
             {
-                Kind = kind,
-                Level = result == ShopPlacement.Upgraded ? _cells[index].Level + 1 : 1,
-            };
+                ShopCell cell = _cells[index];
+                cell.Xp++;
+                if (cell.Xp >= XpPerLevel)
+                {
+                    cell.Level++;
+                    cell.Xp = 0;
+                }
+
+                _cells[index] = cell;
+            }
+            else
+            {
+                _cells[index] = new ShopCell { Kind = kind, Level = 1 };
+            }
 
             return result;
         }

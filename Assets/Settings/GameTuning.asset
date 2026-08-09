@@ -42,7 +42,7 @@ MonoBehaviour:
   PriceMaxHealth: 10
   GainAttack: 1
   GainShield: 2
-  GainRunHeal: 2
+  GainRunHeal: 5
   GainMaxHealth: 5
   ShopStonePrice: 15
   RerollBasePrice: 5

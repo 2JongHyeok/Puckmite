@@ -49,7 +49,7 @@ namespace Puckmite.View
         public int PriceMaxHealth = 10;
         public int GainAttack = 1;    // stat gained per point of settled Attack
         public int GainShield = 2;
-        public int GainRunHeal = 2;
+        public int GainRunHeal = 5;   // 사용자 지정 2026-08-09 (기존 2)
         public int GainMaxHealth = 5;
         public int ShopStonePrice = 15;        // extra shop stone, this visit only (design doc 5.4)
         public int RerollBasePrice = 5;        // the visit's first reroll (design doc 5.3)

@@ -178,6 +178,13 @@ namespace Puckmite.EditorTools
                 {
                     SetReference(controller, "_merchantBodyPrefab", peddlerArt);
                 }
+
+                // The buying panel's pieces (user mock 2026-08-09); the panel renders flat placeholder
+                // rects for any that are still missing.
+                SetOptionalSprite(controller, "_shopPanelSprite", "Assets/Art/Sprites/UI/shop_panel");
+                SetOptionalSprite(controller, "_rerollButtonSprite", "Assets/Art/Sprites/UI/btn_reroll");
+                SetOptionalSprite(controller, "_closeButtonSprite", "Assets/Art/Sprites/UI/btn_close");
+                SetOptionalSprite(controller, "_goldPanelSprite", "Assets/Art/Sprites/UI/Gold_pannel");
             }
 
             EditorSceneManager.SaveScene(scene, path);

@@ -35,6 +35,15 @@ namespace Puckmite.View
         private SpriteRenderer _pendingCellGhost;
         private bool _shopUsesArt; // cell-sheet frames wired: cells wear frames, flat quads otherwise
 
+        // Per-cell stack gauge and level sparkles (사용자 지정 2026-08-09): each same-kind placement
+        // fills one tick along the cell's bottom; a full gauge levels the cell up, shown as one more
+        // sparkle in the frame's top-left row. The face art bakes the first sparkles, extras draw here.
+        private SpriteRenderer[][] _shopCellXpTicks;   // [cell][XpPerLevel]
+        private SpriteRenderer[][] _shopCellSparkles;  // [cell][MaxExtraSparkles]
+        private const int MaxExtraSparkles = 4;        // display cap; levels keep counting past it
+        private static readonly Color XpTickFilled = new Color(0.45f, 1f, 0.5f, 0.9f); // the stones' XP green
+        private static readonly Color XpTickEmpty = new Color(0.08f, 0.10f, 0.14f, 0.9f);
+
         // The merchant's click affordances: silhouette outline (faint = clickable, bright = hovered) and
         // the floating "상점 열기" label. The click/hover disc comes from the art bounds, like the battle
         // characters', or from the placeholder circle's constants.
@@ -44,6 +53,14 @@ namespace Puckmite.View
         private float _merchantLabelBaseY;
         private Vector2 _merchantCenter;
         private float _merchantGrabRadius;
+
+        // The buying panel's art (user mock 2026-08-09), wired by Setup Game Scenes; the panel renders
+        // flat placeholder rects for any piece still missing.
+        [SerializeField] private Sprite _shopPanelSprite;
+        [SerializeField] private Sprite _rerollButtonSprite;
+        [SerializeField] private Sprite _closeButtonSprite;
+        [SerializeField] private Sprite _goldPanelSprite;
+        private MerchantPanel _merchantPanel;
 
         // One merchant slot: an upgrade cell, or (rarely) a battle stone in the same slot (design doc 5.3).
         private enum OfferType
@@ -162,6 +179,7 @@ namespace Puckmite.View
             UpdatePuckTransforms();
             UpdateShopCells();
             UpdateMerchantHighlight();
+            UpdateMerchantPanel();
             UpdateGhost();
         }
 
@@ -205,6 +223,38 @@ namespace Puckmite.View
             return _tuning.RerollBasePrice + _tuning.RerollPriceStep * _rerollCount;
         }
 
+        // The panel's reroll button: every slot is redrawn, sold ones included, and each reroll makes
+        // the next one dearer (design doc 5.3).
+        private void TryReroll()
+        {
+            int price = RerollPrice();
+            if (Campaign.Gold < price)
+            {
+                return;
+            }
+
+            Campaign.Gold -= price;
+            _rerollCount++;
+            RerollOffers();
+        }
+
+        private void OnMerchantSlotClicked(int slot)
+        {
+            if (slot < 0 || slot >= _shopOffers.Count || !_shopOffers[slot].HasValue)
+            {
+                return;
+            }
+
+            if (_shopOffers[slot].Value.Type == OfferType.BattleStone)
+            {
+                BuyBattleStone(slot);
+            }
+            else
+            {
+                BuyCell(slot);
+            }
+        }
+
         private int PriceOf(UpgradeKind kind)
         {
             switch (kind)
@@ -235,6 +285,31 @@ namespace Puckmite.View
                 case UpgradeKind.Shield: return "Shield";
                 case UpgradeKind.RunHeal: return "Run heal";
                 default: return "Max health";
+            }
+        }
+
+        // Player-facing kind names are Korean (the in-game UI language); UpgradeName stays English for
+        // the developer-facing log lines.
+        private static string KoreanUpgradeName(UpgradeKind kind)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return "공격";
+                case UpgradeKind.Shield: return "방패";
+                case UpgradeKind.RunHeal: return "회복";
+                default: return "최대 체력";
+            }
+        }
+
+        // What a kind raises, in the tooltip's words (사용자 지정 2026-08-09).
+        private static string KoreanUpgradeEffect(UpgradeKind kind)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return "기본 공격력";
+                case UpgradeKind.Shield: return "기본 쉴드량";
+                case UpgradeKind.RunHeal: return "체력 회복";
+                default: return "최대 체력";
             }
         }
 
@@ -362,8 +437,11 @@ namespace Puckmite.View
 
             _hasPendingCell = false;
             _pendingSlot = -1;
+            ShopCell landed = Campaign.ShopBoard.CellAt(col, row);
             _shopLog = result == ShopPlacement.Upgraded
-                ? $"{UpgradeName(_pendingCell)} cell upgraded to level {Campaign.ShopBoard.CellAt(col, row).Level}."
+                ? (landed.Xp == 0
+                    ? $"{UpgradeName(_pendingCell)} cell upgraded to level {landed.Level}."
+                    : $"{UpgradeName(_pendingCell)} cell XP {landed.Xp}/{ShopBoard.XpPerLevel}.")
                 : result == ShopPlacement.Replaced
                     ? $"Cell replaced with {UpgradeName(_pendingCell)} (previous levels lost)."
                     : $"{UpgradeName(_pendingCell)} cell placed.";
@@ -401,16 +479,42 @@ namespace Puckmite.View
                 && _cellShieldSprite != null && _cellShieldStrongSprite != null;
 
             _shopCellViews = new SpriteRenderer[BoardCells.Size * BoardCells.Size];
+            _shopCellXpTicks = new SpriteRenderer[BoardCells.Size * BoardCells.Size][];
+            _shopCellSparkles = new SpriteRenderer[BoardCells.Size * BoardCells.Size][];
             for (int row = 0; row < BoardCells.Size; row++)
             {
                 for (int col = 0; col < BoardCells.Size; col++)
                 {
+                    int index = col + row * BoardCells.Size;
                     Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
                     // Art frames carry their own borders, so they sit edge to edge at full cell size;
                     // the flat quads keep their 0.96 inset as the visual grid.
-                    _shopCellViews[col + row * BoardCells.Size] = _shopUsesArt
+                    _shopCellViews[index] = _shopUsesArt
                         ? MakeCellSprite("ShopCell", board, center, cellSize, _cellEmptySprite, 1)
                         : MakeQuad("ShopCell", board, center, cellSize * 0.96f, EmptyShopCellColor, 1);
+
+                    // The stack gauge (hidden until the cell is bought) and the extra level sparkles.
+                    SpriteRenderer[] ticks = new SpriteRenderer[ShopBoard.XpPerLevel];
+                    for (int t = 0; t < ticks.Length; t++)
+                    {
+                        SpriteRenderer tick = MakeQuad("CellXpTick", board,
+                            center + new Vector2(-1.45f + 1.45f * t, -1.95f), new Vector2(1.2f, 0.35f), XpTickEmpty, 2);
+                        tick.enabled = false;
+                        ticks[t] = tick;
+                    }
+
+                    _shopCellXpTicks[index] = ticks;
+
+                    SpriteRenderer[] sparkles = new SpriteRenderer[MaxExtraSparkles];
+                    for (int s = 0; s < sparkles.Length; s++)
+                    {
+                        SpriteRenderer sparkle = MakeQuad("CellLvSparkle", board, center, new Vector2(0.34f, 0.34f), Color.white, 2);
+                        sparkle.transform.localRotation = Quaternion.Euler(0f, 0f, 45f); // diamond, like the art's
+                        sparkle.enabled = false;
+                        sparkles[s] = sparkle;
+                    }
+
+                    _shopCellSparkles[index] = sparkles;
                 }
             }
 
@@ -453,6 +557,13 @@ namespace Puckmite.View
             _merchantOutline = BuildCharacterOutline(_merchantView);
             BuildMerchantLabel();
 
+            // The buying panel, hidden until the merchant is clicked (user mock 2026-08-09).
+            _merchantPanel = new MerchantPanel(transform, ShopOfferSlots,
+                _shopPanelSprite, _closeButtonSprite, _rerollButtonSprite, _goldPanelSprite);
+            _merchantPanel.CloseClicked = () => _merchantOpen = false;
+            _merchantPanel.RerollClicked = TryReroll;
+            _merchantPanel.SlotClicked = OnMerchantSlotClicked;
+
             // Ghost of the cell being carried from the shop, snapped to whichever board cell is hovered.
             GameObject pending = new GameObject("PendingCellGhost");
             pending.transform.SetParent(transform, false);
@@ -462,6 +573,52 @@ namespace Puckmite.View
             _pendingCellGhost.enabled = false;
 
             MakeInfoBox("ShopBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = "상점";
+        }
+
+        // One bought cell's stack gauge and level sparkles: the ticks along the bottom fill with each
+        // same-kind placement, and the sparkle count equals the cell's level (사용자 지정) — the face
+        // art bakes the first ones (one per face; two on the lv2+ attack/shield faces), extras continue
+        // the top-left row here, capped at MaxExtraSparkles for display.
+        private void UpdateCellProgress(int index, ShopCell cell, Vector2 center)
+        {
+            SpriteRenderer[] ticks = _shopCellXpTicks[index];
+            for (int t = 0; t < ticks.Length; t++)
+            {
+                ticks[t].enabled = !cell.IsEmpty;
+                if (!cell.IsEmpty)
+                {
+                    ticks[t].color = t < cell.Xp ? XpTickFilled : XpTickEmpty;
+                }
+            }
+
+            SpriteRenderer[] sparkles = _shopCellSparkles[index];
+            int baked = !_shopUsesArt || cell.IsEmpty
+                ? 0
+                : (cell.Level >= 2 && (cell.Kind == UpgradeKind.Attack || cell.Kind == UpgradeKind.Shield) ? 2 : 1);
+            int extras = cell.IsEmpty ? 0 : Mathf.Clamp(cell.Level - baked, 0, sparkles.Length);
+            for (int s = 0; s < sparkles.Length; s++)
+            {
+                sparkles[s].enabled = s < extras;
+                if (s < extras)
+                {
+                    // Continue the art's sparkle row rightward from however many it baked.
+                    sparkles[s].transform.localPosition = new Vector3(
+                        center.x - 2.5f + 0.65f + 0.7f * (baked + s), center.y + 2.5f - 0.65f, 0f);
+                    sparkles[s].color = SparkleColor(cell.Kind);
+                }
+            }
+        }
+
+        // The art's sparkle colours by kind, for the extra level sparkles.
+        private static Color SparkleColor(UpgradeKind kind)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return new Color(1f, 0.68f, 0.25f);
+                case UpgradeKind.Shield: return new Color(0.40f, 0.85f, 1f);
+                case UpgradeKind.RunHeal: return new Color(0.45f, 0.95f, 0.5f);
+                default: return new Color(1f, 0.40f, 0.45f);
+            }
         }
 
         // The peddler art (Peddler.aseprite prefab): the battle characters' pixel scale, feet on the
@@ -562,6 +719,67 @@ namespace Puckmite.View
                 hovered ? HoverOutlineThickness : OutlineThickness);
         }
 
+        // Feeds the buying panel and drives its input while the merchant is open: offers, prices, gold
+        // and the reroll cost every frame (cheap, and it keeps the panel honest after buys and rerolls),
+        // clicks through the panel's callbacks, ESC as a second way out (사용자 지정).
+        private void UpdateMerchantPanel()
+        {
+            if (_merchantPanel == null)
+            {
+                return;
+            }
+
+            if (!_merchantOpen || _confirmReplaceOpen)
+            {
+                _merchantPanel.Hide();
+                return;
+            }
+
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame)
+            {
+                _merchantOpen = false;
+                _merchantPanel.Hide();
+                return;
+            }
+
+            _merchantPanel.Show();
+            _merchantPanel.SetGold(Campaign.Gold);
+            int rerollPrice = RerollPrice();
+            _merchantPanel.SetReroll(rerollPrice, Campaign.Gold >= rerollPrice);
+
+            for (int slot = 0; slot < _shopOffers.Count; slot++)
+            {
+                if (!_shopOffers[slot].HasValue)
+                {
+                    _merchantPanel.SetSlotSold(slot);
+                    continue;
+                }
+
+                ShopOffer offer = _shopOffers[slot].Value;
+                if (offer.Type == OfferType.BattleStone)
+                {
+                    // The stone deal has no card art yet: the plain cell frame carries the line.
+                    _merchantPanel.SetSlot(slot, _cellEmptySprite, "전투 스톤 +1", _tuning.BattleStonePrice,
+                        Campaign.Gold >= _tuning.BattleStonePrice && !_shopThrowing);
+                }
+                else
+                {
+                    _merchantPanel.SetSlot(slot, UpgradeSprite(offer.Kind, 1), null, PriceOf(offer.Kind),
+                        Campaign.Gold >= PriceOf(offer.Kind) && !_shopThrowing);
+                }
+            }
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            _merchantPanel.Tick(ScreenToWorld(screen), mouse.leftButton.wasPressedThisFrame, PointerOverShopGui(screen));
+        }
+
         // Every shop stone starts in hand and comes in off the bottom wall.
         private void ResetShopHands()
         {
@@ -605,8 +823,9 @@ namespace Puckmite.View
             {
                 for (int col = 0; col < BoardCells.Size; col++)
                 {
+                    int index = col + row * BoardCells.Size;
                     ShopCell cell = Campaign.ShopBoard.CellAt(col, row);
-                    SpriteRenderer view = _shopCellViews[col + row * BoardCells.Size];
+                    SpriteRenderer view = _shopCellViews[index];
                     Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
                     Sprite art = _shopUsesArt
                         ? (cell.IsEmpty ? _cellEmptySprite : UpgradeSprite(cell.Kind, cell.Level))
@@ -626,6 +845,8 @@ namespace Puckmite.View
                             ? EmptyShopCellColor
                             : Color.Lerp(UpgradeColor(cell.Kind), Color.white, Mathf.Min(0.12f * (cell.Level - 1), 0.5f));
                     }
+
+                    UpdateCellProgress(index, cell, center);
                 }
             }
 
@@ -842,9 +1063,12 @@ namespace Puckmite.View
                 return;
             }
 
+            // The buying panel itself is world-space sprites (MerchantPanel); IMGUI only follows the
+            // cursor with the hovered offer's tooltip. Everything else stays undrawn so no hidden
+            // control can take a click through the panel.
             if (_merchantOpen)
             {
-                DrawMerchantScreen(rich);
+                DrawMerchantTooltip(rich);
                 return;
             }
 
@@ -895,120 +1119,62 @@ namespace Puckmite.View
                 GUI.Label(new Rect(x, 254f, 190f, 40f),
                     $"Placing {UpgradeName(_pendingCell)}\nright-click to cancel", rich);
             }
+
+            DrawBoardCellTooltip(rich);
         }
 
-        // The merchant's screen: three cells on the table, a reroll button, and a close button. It covers
-        // the board while open (design doc 5.3 — the offer is what you may buy).
-        private void DrawMerchantScreen(GUIStyle rich)
+        // Kind and level of the bought board cell under the cursor (사용자 지정 2026-08-09) — quiet on
+        // empty cells, over the GUI, and mid-drag where it would only chase the aim.
+        private void DrawBoardCellTooltip(GUIStyle rich)
         {
-            GUI.Box(new Rect(0f, 0f, Screen.width, Screen.height), GUIContent.none);
-
-            float midX = Screen.width * 0.5f;
-            GUI.Label(new Rect(midX - 60f, Screen.height * 0.18f, 200f, 30f), "<b>Merchant</b>", rich);
-            GUI.Label(new Rect(Screen.width - 170f, 12f, 160f, 24f), $"<b>Gold {Campaign.Gold}</b>", rich);
-
-            // Reroll sits above the table with its price beside it: every slot is redrawn, sold ones
-            // included, and each reroll makes the next one dearer (design doc 5.3).
-            int rerollPrice = RerollPrice();
-            GUI.enabled = Campaign.Gold >= rerollPrice;
-            if (GUI.Button(new Rect(midX + 150f, Screen.height * 0.42f - 40f, 90f, 30f), "Reroll"))
+            if (_aiming)
             {
-                Campaign.Gold -= rerollPrice;
-                _rerollCount++;
-                RerollOffers();
-            }
-            GUI.enabled = true;
-            GUI.Label(new Rect(midX + 250f, Screen.height * 0.42f - 36f, 120f, 24f), GoldTag(rerollPrice), rich);
-
-            // The table: three slots, emptied as they are bought.
-            float tableY = Screen.height * 0.42f;
-            GUI.Box(new Rect(midX - 330f, tableY, 660f, 190f), GUIContent.none);
-
-            GUIStyle centered = new GUIStyle(rich) { alignment = TextAnchor.MiddleCenter };
-
-            for (int slot = 0; slot < _shopOffers.Count; slot++)
-            {
-                Rect card = new Rect(midX - 310f + slot * 215f, tableY + 20f, 190f, 150f);
-                if (!_shopOffers[slot].HasValue)
-                {
-                    GUI.Label(new Rect(card.x + 60f, card.y + 60f, 120f, 24f), "sold", rich);
-                    continue;
-                }
-
-                ShopOffer offer = _shopOffers[slot].Value;
-
-                // The rare battle-stone offer shares the slot (design doc 5.3); buying it is immediate.
-                if (offer.Type == OfferType.BattleStone)
-                {
-                    int stonePrice = _tuning.BattleStonePrice;
-                    GUI.enabled = Campaign.Gold >= stonePrice && !_shopThrowing;
-                    if (GUI.Button(card, "전투 스톤 +1"))
-                    {
-                        BuyBattleStone(slot);
-                    }
-                    GUI.enabled = true;
-
-                    GUI.Label(new Rect(card.x + 70f, card.yMax + 2f, 120f, 24f), GoldTag(stonePrice), rich);
-
-                    if (card.Contains(Event.current.mousePosition))
-                    {
-                        Vector2 m = Event.current.mousePosition;
-                        GUI.Box(new Rect(m.x + 16f, m.y + 16f, 260f, 46f), GUIContent.none);
-                        GUI.Label(new Rect(m.x + 24f, m.y + 20f, 250f, 40f),
-                            "Battle stone\nOne more roster stone from the next run, until defeat.", rich);
-                    }
-
-                    continue;
-                }
-
-                UpgradeKind kind = offer.Kind;
-                int price = PriceOf(kind);
-                bool affordable = Campaign.Gold >= price && !_shopThrowing;
-
-                GUI.enabled = affordable;
-                if (GUI.Button(card, GUIContent.none))
-                {
-                    BuyCell(slot);
-                }
-                GUI.enabled = true;
-
-                // The card face is the cell itself — its sheet frame at a crisp 2x, nothing else
-                // (사용자 지정: per-point 문구 제거, 상세는 호버 툴팁이 말한다). Text face only while
-                // the art is missing.
-                Sprite face = UpgradeSprite(kind, 1);
-                if (face != null)
-                {
-                    const float side = 100f; // the 50px frame at exactly 2x stays pixel-crisp
-                    Rect artRect = new Rect(card.center.x - side * 0.5f, card.center.y - side * 0.5f, side, side);
-                    Color guiColor = GUI.color;
-                    GUI.color = affordable ? Color.white : new Color(1f, 1f, 1f, 0.4f);
-                    Rect tr = face.textureRect;
-                    Rect uv = new Rect(tr.x / face.texture.width, tr.y / face.texture.height,
-                        tr.width / face.texture.width, tr.height / face.texture.height);
-                    GUI.DrawTextureWithTexCoords(artRect, face.texture, uv);
-                    GUI.color = guiColor;
-                }
-                else
-                {
-                    GUI.Label(card, UpgradeName(kind), centered);
-                }
-
-                GUI.Label(new Rect(card.x + 70f, card.yMax + 2f, 120f, 24f), GoldTag(price), rich);
-
-                // Tooltip beside the cursor while the card is hovered.
-                if (card.Contains(Event.current.mousePosition))
-                {
-                    Vector2 m = Event.current.mousePosition;
-                    GUI.Box(new Rect(m.x + 16f, m.y + 16f, 260f, 46f), GUIContent.none);
-                    GUI.Label(new Rect(m.x + 24f, m.y + 20f, 250f, 40f),
-                        $"{UpgradeName(kind)}\nStone on this cell: +{GainOf(kind)} x cell level x stone level", rich);
-                }
+                return;
             }
 
-            if (GUI.Button(new Rect(Screen.width - 110f, 50f, 90f, 30f), "Close"))
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
             {
-                _merchantOpen = false;
+                return;
             }
+
+            Vector2 screen = mouse.position.ReadValue();
+            if (PointerOverShopGui(screen) || !ShopCellAt(ScreenToWorld(screen), out int col, out int row))
+            {
+                return;
+            }
+
+            ShopCell cell = Campaign.ShopBoard.CellAt(col, row);
+            if (cell.IsEmpty)
+            {
+                return;
+            }
+
+            string text = $"{KoreanUpgradeName(cell.Kind)} 칸 · 레벨 {cell.Level}";
+            Vector2 m = Event.current.mousePosition;
+            GUI.Box(new Rect(m.x + 16f, m.y + 16f, 190f, 28f), GUIContent.none);
+            GUI.Label(new Rect(m.x + 24f, m.y + 20f, 180f, 22f), text, rich);
+        }
+
+        // The cursor-following tooltip for the offer the panel reports as hovered — the one piece of the
+        // buying screen still on IMGUI, so it can sit beside the cursor for free.
+        private void DrawMerchantTooltip(GUIStyle rich)
+        {
+            int slot = _merchantPanel != null ? _merchantPanel.HoveredSlot : -1;
+            if (slot < 0 || slot >= _shopOffers.Count || !_shopOffers[slot].HasValue)
+            {
+                return;
+            }
+
+            // Tooltip copy is 사용자 지정 (2026-08-09); the number tracks the tuning so it never lies.
+            ShopOffer offer = _shopOffers[slot].Value;
+            string text = offer.Type == OfferType.BattleStone
+                ? "전투 스톤\n전투에서 사용할 수 있는 스톤 수 +1"
+                : $"{KoreanUpgradeName(offer.Kind)} 칸\n해당 칸에 올라간 스톤 수 만큼 {KoreanUpgradeEffect(offer.Kind)} +{GainOf(offer.Kind)}";
+
+            Vector2 m = Event.current.mousePosition;
+            GUI.Box(new Rect(m.x + 16f, m.y + 16f, 260f, 46f), GUIContent.none);
+            GUI.Label(new Rect(m.x + 24f, m.y + 20f, 250f, 40f), text, rich);
         }
 
         // The replace warning (design doc 5.1): OK replaces the cell and its levels are gone, cancel keeps
