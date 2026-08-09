@@ -58,6 +58,7 @@ namespace Puckmite.Sim
                 HoleClearedCheck(),
                 BombExplosionCheck(),
                 AnchorCheck(),
+                AnchorPairCheck(),
                 SniperDamageCheck(),
                 SniperPlanCheck(),
             };
@@ -957,6 +958,38 @@ namespace Puckmite.Sim
             string detail =
                 $"anchorStayed={anchorStayed}, strikerRestX={striker.Position.x:F2}(exp < -4.5), striker hp={striker.Health}(exp4), anchor hp={anchor.Health}(exp1).";
             return new CheckResult("Anchor stone", passed, detail);
+        }
+
+        /// <summary>반석끼리 (사용자 지정 2026-08-10): between two anchors the resting one keeps its
+        /// ground and only the rolled one is turned back — full energy return, and the pair never comes
+        /// to rest overlapping.</summary>
+        public static CheckResult AnchorPairCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            sim.AddPuck(new Puck(0, new Vector2(-8f, 0f), 1.5f, 1f, PuckOwner.Enemy)
+            {
+                Health = 2,
+                Trait = StoneTrait.Anchor,
+                Velocity = new Vector2(12f, 0f),
+            });
+            sim.AddPuck(new Puck(1, new Vector2(0f, 0f), 1.5f, 1f, PuckOwner.Enemy) { Health = 2, Trait = StoneTrait.Anchor });
+
+            sim.RunToRest();
+
+            sim.TryGetPuck(0, out Puck rolled);
+            sim.TryGetPuck(1, out Puck rester);
+            bool resterStayed = rester.Position == new Vector2(0f, 0f);
+            // Full return, the AnchorCheck bar: with the 0.7 bleed an ordinary collision would leave the
+            // rolled one around x=-4.1, so clearly beyond that proves the anchor treatment applied.
+            bool bouncedBack = rolled.Position.x < -4.5f;
+            bool separated = (rolled.Position - rester.Position).magnitude >= 2.999f;
+            bool undamaged = rolled.Health == 2 && rester.Health == 2; // same team: no contact damage
+
+            bool passed = resterStayed && bouncedBack && separated && undamaged;
+            string detail =
+                $"resterStayed={resterStayed}, rolledRestX={rolled.Position.x:F2}(exp < -4.5), separated={separated}, hp={rolled.Health}/{rester.Health}(exp 2/2).";
+            return new CheckResult("Anchor pair", passed, detail);
         }
 
         /// <summary>저격 (design doc 4.3): the armed sniper stone's first player contact deals 2 and

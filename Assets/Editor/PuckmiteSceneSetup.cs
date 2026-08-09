@@ -184,8 +184,6 @@ namespace Puckmite.EditorTools
 
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
-                SetOptionalSprite(controller, "_victoryPanelSprite", "Assets/Art/Sprites/UI/VictoryPanel");
-                SetOptionalSprite(controller, "_victoryButtonSprite", "Assets/Art/Sprites/UI/VictoryButton");
                 SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/Gold");
                 SetOptionalSprite(controller, "_skipButtonSprite", "Assets/Art/Sprites/UI/btn_skip_roll");
                 WireAudioClip(controller, "_sfxBossSkill", "Assets/Sound/SFX/boss_skill.wav");

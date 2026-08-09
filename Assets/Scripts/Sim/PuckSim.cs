@@ -628,12 +628,20 @@ namespace Puckmite.Sim
             }
 
             // The anchor stone is immovable in a collision (infinite mass), though it still travels
-            // normally when its own roll gave it velocity — mass only governs impulse exchange. Two
-            // anchors resolve as ordinary stones: with both immovable nothing could ever separate them,
-            // so a rolled anchor would pass through (and permanently overlap) a resting one.
-            bool bothAnchors = a.Trait == StoneTrait.Anchor && b.Trait == StoneTrait.Anchor;
-            float invMassA = a.Trait == StoneTrait.Anchor && !bothAnchors ? 0f : (a.Mass > 0f ? 1f / a.Mass : 0f);
-            float invMassB = b.Trait == StoneTrait.Anchor && !bothAnchors ? 0f : (b.Mass > 0f ? 1f / b.Mass : 0f);
+            // normally when its own roll gave it velocity — mass only governs impulse exchange. Between
+            // two anchors the resting one keeps its ground and only the rolled one is turned back
+            // (사용자 지정 2026-08-10). With both in motion — unreachable in play, since impacts never
+            // set an anchor moving — they resolve as ordinary stones, so they can never come to rest
+            // overlapped; two resting overlapped anchors likewise separate as ordinary stones.
+            bool aAnchor = a.Trait == StoneTrait.Anchor;
+            bool bAnchor = b.Trait == StoneTrait.Anchor;
+            bool bothAnchors = aAnchor && bAnchor;
+            bool aMoving = a.Velocity.sqrMagnitude > 1e-8f;
+            bool bMoving = b.Velocity.sqrMagnitude > 1e-8f;
+            bool aImmovable = aAnchor && (!bothAnchors || (!aMoving && bMoving));
+            bool bImmovable = bAnchor && (!bothAnchors || (!bMoving && aMoving));
+            float invMassA = aImmovable ? 0f : (a.Mass > 0f ? 1f / a.Mass : 0f);
+            float invMassB = bImmovable ? 0f : (b.Mass > 0f ? 1f / b.Mass : 0f);
             float invMassSum = invMassA + invMassB;
             if (invMassSum <= 0f)
             {
@@ -657,9 +665,10 @@ namespace Puckmite.Sim
             if (velocityAlongNormal < 0f)
             {
                 // The anchor returns the collision energy in full: perfect restitution and no impact
-                // bleed, so the striker flies back with everything it arrived with (design doc 4.3).
-                // Anchor-vs-anchor is an ordinary collision (see bothAnchors above).
-                bool anchorInvolved = (a.Trait == StoneTrait.Anchor || b.Trait == StoneTrait.Anchor) && !bothAnchors;
+                // bleed, so the striker flies back with everything it arrived with (design doc 4.3) —
+                // whenever an immovable anchor took the hit, a rolled anchor striking a resting one
+                // included (사용자 지정 2026-08-10).
+                bool anchorInvolved = aImmovable || bImmovable;
                 float restitution = anchorInvolved ? 1f : _restitution;
 
                 float impulseMagnitude = -(1f + restitution) * velocityAlongNormal / invMassSum;

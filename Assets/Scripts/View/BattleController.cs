@@ -87,10 +87,8 @@ namespace Puckmite.View
         [SerializeField] private Sprite _stoneIconSprite;
 
         // Flat-colour silhouette material (PuckHero/SpriteSilhouette) behind the character outline.
-        // Victory panel art (promised paths UI/VictoryPanel·VictoryButton·Gold — 디자인은 사용자가 추후).
-        [SerializeField] private Sprite _victoryPanelSprite;
-        [SerializeField] private Sprite _victoryButtonSprite;
-        [SerializeField] private Sprite _goldIconSprite;
+        // The victory panel wears the picker dress (사용자 지정 2026-08-10); only the coin art remains.
+        [SerializeField] private Sprite _goldIconSprite; // promised path UI/Gold
 
         private VictoryPanel _victoryPanel;
         private int _goldEarnedThisRun; // kill gold this run, for the victory panel's line and its double pick
@@ -1469,7 +1467,7 @@ namespace Puckmite.View
         // pure view — the effects live here, on the campaign the controller already owns.
         private void BuildVictoryPanel()
         {
-            _victoryPanel = new VictoryPanel(transform, _victoryPanelSprite, _victoryButtonSprite, _goldIconSprite, VictoryHealAmount());
+            _victoryPanel = new VictoryPanel(transform, _goldIconSprite);
             _victoryPanel.HealChosen = ApplyVictoryHeal;
             _victoryPanel.GoldChosen = ApplyVictoryGold;
             _victoryPanel.ShopChosen = GameFlow.LoadShop;

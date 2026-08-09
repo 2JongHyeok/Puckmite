@@ -5,11 +5,11 @@ using UnityEngine;
 namespace Puckmite.View
 {
     /// <summary>
-    /// The run-victory panel (user mock 2026-08-09): drops in from above the camera, reports the run's
-    /// gold, offers one fixed bonus pick — heal a fifth of max health, or double the gold — and the way
-    /// on to the shop. Picking one hides the other and keeps the pick visible; the shop button works
-    /// with or without a pick. Pure view: the controller owns the effects and feeds numbers in through
-    /// Show and the callbacks.
+    /// The run-victory panel in the difficulty picker's dress (사용자 지정 2026-08-10: gold frame, dark
+    /// box, gold heading): drops in from above the camera, reports the run's gold, offers one fixed
+    /// bonus pick — heal 20% of max health, or double the gold — and the way on to the shop. Picking one
+    /// hides the other and keeps the pick visible; the shop button works with or without a pick. Pure
+    /// view: the controller owns the effects and feeds numbers in through Show and the callbacks.
     /// </summary>
     public sealed class VictoryPanel
     {
@@ -22,7 +22,10 @@ namespace Puckmite.View
         public Action GoldChosen = delegate { };
         public Action ShopChosen = delegate { };
 
-        private static readonly Color PanelTint = new Color(0.14f, 0.17f, 0.24f, 0.97f);
+        // The difficulty picker's dress (TitleController's picker, reused by the ESC menu too).
+        private static readonly Color PanelTint = new Color(0.08f, 0.10f, 0.15f, 0.97f);
+        private static readonly Color FrameTint = new Color(0.72f, 0.55f, 0.22f);
+        private static readonly Color HeadingTint = new Color(1f, 0.85f, 0.35f);
         private static readonly Color ButtonTint = new Color(0.28f, 0.33f, 0.44f, 1f);
         private static readonly Color ChosenTint = new Color(0.30f, 0.55f, 0.38f, 1f);
         private static readonly Color GoldTint = new Color(0.98f, 0.80f, 0.25f, 1f);
@@ -46,16 +49,18 @@ namespace Puckmite.View
 
         public bool IsShown => _shown;
 
-        public VictoryPanel(Transform parent, Sprite panelArt, Sprite buttonArt, Sprite goldArt, int healAmount)
+        public VictoryPanel(Transform parent, Sprite goldArt)
         {
             _root = new GameObject("VictoryPanel");
             _root.transform.SetParent(parent, false);
             _root.transform.localScale = new Vector3(PanelScale, PanelScale, 1f); // scales layout, art and hit bounds together
 
-            MakeRect(_root.transform, "PanelBg", panelArt, Vector2.zero, new Vector2(16f, 11f),
-                panelArt != null ? Color.white : PanelTint, 20);
-            MakeText(_root.transform, "Title", "승리!", new Vector2(0f, 7.2f), new Vector2(12f, 3f),
+            // The picker's thin gold frame with the dark box inset over it (+0.3 world at the ×2 scale).
+            MakeRect(_root.transform, "Frame", null, Vector2.zero, new Vector2(16.15f, 11.15f), FrameTint, 19);
+            MakeRect(_root.transform, "PanelBg", null, Vector2.zero, new Vector2(16f, 11f), PanelTint, 20);
+            TextMeshPro title = MakeText(_root.transform, "Title", "승리!", new Vector2(0f, 7.2f), new Vector2(12f, 3f),
                 TextAlignmentOptions.Center, 14f, 24);
+            title.color = HeadingTint;
 
             MakeIcon(_root.transform, "GoldIcon", goldArt, new Vector2(-2.4f, 3.6f), 0.9f, 23);
             _goldLine = MakeText(_root.transform, "GoldLine", "x 0 획득!", new Vector2(1.9f, 3.6f),
@@ -70,9 +75,8 @@ namespace Puckmite.View
             _healButton.transform.localPosition = new Vector3(0f, 0.4f, 0f);
             _healOutline = MakeRect(_healButton.transform, "Outline", null, Vector2.zero, new Vector2(10.3f, 2.1f), OutlineTint, 21);
             _healOutline.enabled = false;
-            _healBg = MakeRect(_healButton.transform, "Bg", buttonArt, Vector2.zero, new Vector2(10f, 1.8f),
-                buttonArt != null ? Color.white : ButtonTint, 22);
-            MakeText(_healButton.transform, "Text", $"체력 {healAmount} 회복", Vector2.zero, new Vector2(9f, 1.6f),
+            _healBg = MakeRect(_healButton.transform, "Bg", null, Vector2.zero, new Vector2(10f, 1.8f), ButtonTint, 22);
+            MakeText(_healButton.transform, "Text", "최대 체력 20% 회복", Vector2.zero, new Vector2(9f, 1.6f),
                 TextAlignmentOptions.Center, 8f, 23);
 
             // Double-gold pick, with the coin inside the label like the mock.
@@ -81,8 +85,7 @@ namespace Puckmite.View
             _goldButton.transform.localPosition = new Vector3(0f, -1.9f, 0f);
             _goldOutline = MakeRect(_goldButton.transform, "Outline", null, Vector2.zero, new Vector2(10.3f, 2.1f), OutlineTint, 21);
             _goldOutline.enabled = false;
-            _goldBg = MakeRect(_goldButton.transform, "Bg", buttonArt, Vector2.zero, new Vector2(10f, 1.8f),
-                buttonArt != null ? Color.white : ButtonTint, 22);
+            _goldBg = MakeRect(_goldButton.transform, "Bg", null, Vector2.zero, new Vector2(10f, 1.8f), ButtonTint, 22);
             MakeIcon(_goldButton.transform, "Icon", goldArt, new Vector2(-3.6f, 0f), 0.8f, 23);
             _goldButtonText = MakeText(_goldButton.transform, "Text", "x 0 추가 획득", new Vector2(0.5f, 0f),
                 new Vector2(7.6f, 1.6f), TextAlignmentOptions.Center, 8f, 23);
@@ -92,8 +95,7 @@ namespace Puckmite.View
             shopButton.transform.localPosition = new Vector3(0f, -4.2f, 0f);
             _shopOutline = MakeRect(shopButton.transform, "Outline", null, Vector2.zero, new Vector2(6.3f, 1.8f), OutlineTint, 21);
             _shopOutline.enabled = false;
-            _shopBg = MakeRect(shopButton.transform, "Bg", buttonArt, Vector2.zero, new Vector2(6f, 1.5f),
-                buttonArt != null ? Color.white : ButtonTint, 22);
+            _shopBg = MakeRect(shopButton.transform, "Bg", null, Vector2.zero, new Vector2(6f, 1.5f), ButtonTint, 22);
             MakeText(shopButton.transform, "Text", "상점으로", Vector2.zero, new Vector2(5.4f, 1.3f),
                 TextAlignmentOptions.Center, 8f, 23);
 
