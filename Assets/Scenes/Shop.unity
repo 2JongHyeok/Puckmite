@@ -259,6 +259,12 @@ MonoBehaviour:
   _previewDashSprite: {fileID: 0}
   _previewHitGhostSprite: {fileID: 0}
   _backgroundSprite: {fileID: 21300000, guid: 2c0acf30b75cb00498a635d5e71599f6, type: 3}
+  _cellAttackSprite: {fileID: -9118541361379625787, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellAttackStrongSprite: {fileID: 5144342635762240960, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellShieldSprite: {fileID: 6497133735845592826, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellShieldStrongSprite: {fileID: 7002738135808577354, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellDamageSprite: {fileID: 8113658760455903481, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellEmptySprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
 --- !u!4 &1264881507
 Transform:
   m_ObjectHideFlags: 0

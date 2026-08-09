@@ -95,6 +95,17 @@ namespace Puckmite.View
         // until it is wired; wider aspects see the camera colour past its edges.
         [SerializeField] private Sprite _backgroundSprite;
 
+        // Optional board-cell art from Assets/Art/Sprites/UI/cell_sheet.aseprite, wired by Setup Game
+        // Scenes one frame per face (frame order is the mapping — see WireCellSprites). Scenes fall back
+        // to their flat placeholder cells while frames are missing. All frames share one rect and pivot,
+        // so a renderer fitted once can swap between them freely.
+        [SerializeField] protected Sprite _cellAttackSprite;       // Frame_0: sword
+        [SerializeField] protected Sprite _cellAttackStrongSprite; // Frame_1: sword + sparkles (stronger)
+        [SerializeField] protected Sprite _cellShieldSprite;       // Frame_2: shield
+        [SerializeField] protected Sprite _cellShieldStrongSprite; // Frame_3: shield + sparkles (stronger)
+        [SerializeField] protected Sprite _cellDamageSprite;       // Frame_4: hazard stripes
+        [SerializeField] protected Sprite _cellEmptySprite;        // Frame_5: plain
+
         private void BuildBackground()
         {
             if (_backgroundSprite == null)
@@ -752,6 +763,28 @@ namespace Puckmite.View
             float halfHeight = (contentTop - contentBottom) * 0.5f * margin;
             float halfWidth = BoardHalf * margin;
             _camera.orthographicSize = Mathf.Max(halfHeight, halfWidth / aspect);
+        }
+
+        /// <summary>Fits a cell renderer's sprite to the cell rectangle, centring by bounds so the
+        /// sheet's bottom pivot needs no special casing. Safe to call again to swap the sprite.</summary>
+        protected static void FitCellSprite(SpriteRenderer sr, Vector2 center, Vector2 size, Sprite sprite)
+        {
+            sr.sprite = sprite;
+            Bounds b = sprite.bounds;
+            Vector3 scale = new Vector3(size.x / b.size.x, size.y / b.size.y, 1f);
+            sr.transform.localScale = scale;
+            sr.transform.localPosition = new Vector3(center.x - b.center.x * scale.x, center.y - b.center.y * scale.y, 0f);
+        }
+
+        protected static SpriteRenderer MakeCellSprite(string name, Transform parent, Vector2 center, Vector2 size, Sprite sprite, int sortingOrder)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sortingOrder = sortingOrder;
+            FitCellSprite(sr, center, size, sprite);
+            return sr;
         }
 
         protected static SpriteRenderer MakeQuad(string name, Transform parent, Vector2 center, Vector2 size, Color color, int sortingOrder)

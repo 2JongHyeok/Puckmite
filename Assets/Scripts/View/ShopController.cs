@@ -27,6 +27,7 @@ namespace Puckmite.View
         private SpriteRenderer[] _shopCellViews;
         private SpriteRenderer _merchantView;
         private SpriteRenderer _pendingCellGhost;
+        private bool _shopUsesArt; // cell-sheet frames wired: cells wear frames, flat quads otherwise
 
         // One merchant slot: an upgrade cell, or (rarely) a battle stone in the same slot (design doc 5.3).
         private enum OfferType
@@ -231,6 +232,18 @@ namespace Puckmite.View
             }
         }
 
+        // The sheet frame a bought cell wears — sparkles from level 2, the battle centre's "sparkles mean
+        // stronger" rule. RunHeal/MaxHealth have no sheet art yet: null keeps the colour quad.
+        private Sprite UpgradeSprite(UpgradeKind kind, int level)
+        {
+            switch (kind)
+            {
+                case UpgradeKind.Attack: return level >= 2 ? _cellAttackStrongSprite : _cellAttackSprite;
+                case UpgradeKind.Shield: return level >= 2 ? _cellShieldStrongSprite : _cellShieldSprite;
+                default: return null;
+            }
+        }
+
         // Picking an affordable cell closes the merchant and hands it to the cursor to place on the board.
         private void BuyCell(int slot)
         {
@@ -365,23 +378,32 @@ namespace Puckmite.View
             Vector2 boardMax = new Vector2(BoardHalf, BoardHalf);
             Vector2 cellSize = BoardCells.CellSize(boardMin, boardMax);
 
+            _shopUsesArt = _cellEmptySprite != null && _cellAttackSprite != null && _cellAttackStrongSprite != null
+                && _cellShieldSprite != null && _cellShieldStrongSprite != null;
+
             _shopCellViews = new SpriteRenderer[BoardCells.Size * BoardCells.Size];
             for (int row = 0; row < BoardCells.Size; row++)
             {
                 for (int col = 0; col < BoardCells.Size; col++)
                 {
                     Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
-                    _shopCellViews[col + row * BoardCells.Size] =
-                        MakeQuad("ShopCell", board, center, cellSize * 0.96f, EmptyShopCellColor, 1);
+                    // Art frames carry their own borders, so they sit edge to edge at full cell size;
+                    // the flat quads keep their 0.96 inset as the visual grid.
+                    _shopCellViews[col + row * BoardCells.Size] = _shopUsesArt
+                        ? MakeCellSprite("ShopCell", board, center, cellSize, _cellEmptySprite, 1)
+                        : MakeQuad("ShopCell", board, center, cellSize * 0.96f, EmptyShopCellColor, 1);
                 }
             }
 
-            Color gridColor = new Color(1f, 1f, 1f, 0.13f);
-            float[] gridLines = { -7.5f, -2.5f, 2.5f, 7.5f };
-            foreach (float g in gridLines)
+            if (!_shopUsesArt)
             {
-                MakeQuad("GridV", board, new Vector2(g, 0f), new Vector2(0.08f, full), gridColor, 2);
-                MakeQuad("GridH", board, new Vector2(0f, g), new Vector2(full, 0.08f), gridColor, 2);
+                Color gridColor = new Color(1f, 1f, 1f, 0.13f);
+                float[] gridLines = { -7.5f, -2.5f, 2.5f, 7.5f };
+                foreach (float g in gridLines)
+                {
+                    MakeQuad("GridV", board, new Vector2(g, 0f), new Vector2(0.08f, full), gridColor, 2);
+                    MakeQuad("GridH", board, new Vector2(0f, g), new Vector2(full, 0.08f), gridColor, 2);
+                }
             }
 
             Color wallColor = new Color(0.85f, 0.86f, 0.92f);
@@ -439,8 +461,9 @@ namespace Puckmite.View
             }
         }
 
-        // Recolours each board cell for what has been bought onto it, brightening with its level, and
-        // parks the carried-cell ghost on whichever cell the cursor is over.
+        // Dresses each board cell for what has been bought onto it — sheet frames when the art is wired
+        // (sparkles from level 2), colour quads otherwise and for kinds without art — and parks the
+        // carried-cell ghost on whichever cell the cursor is over.
         private void UpdateShopCells()
         {
             if (_shopCellViews == null)
@@ -448,15 +471,34 @@ namespace Puckmite.View
                 return;
             }
 
+            Vector2 boardMin = _sim.BoardMin;
+            Vector2 boardMax = _sim.BoardMax;
+            Vector2 cellSize = BoardCells.CellSize(boardMin, boardMax);
             for (int row = 0; row < BoardCells.Size; row++)
             {
                 for (int col = 0; col < BoardCells.Size; col++)
                 {
                     ShopCell cell = Campaign.ShopBoard.CellAt(col, row);
-                    Color color = cell.IsEmpty
-                        ? EmptyShopCellColor
-                        : Color.Lerp(UpgradeColor(cell.Kind), Color.white, Mathf.Min(0.12f * (cell.Level - 1), 0.5f));
-                    _shopCellViews[col + row * BoardCells.Size].color = color;
+                    SpriteRenderer view = _shopCellViews[col + row * BoardCells.Size];
+                    Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
+                    Sprite art = _shopUsesArt
+                        ? (cell.IsEmpty ? _cellEmptySprite : UpgradeSprite(cell.Kind, cell.Level))
+                        : null;
+                    if (art != null)
+                    {
+                        FitCellSprite(view, center, cellSize, art);
+                        view.color = Color.white;
+                    }
+                    else
+                    {
+                        // Flat board, or a RunHeal/MaxHealth cell (no sheet art yet): the colour language.
+                        view.sprite = ProceduralSprites.Unit();
+                        view.transform.localScale = new Vector3(cellSize.x * 0.96f, cellSize.y * 0.96f, 1f);
+                        view.transform.localPosition = new Vector3(center.x, center.y, 0f);
+                        view.color = cell.IsEmpty
+                            ? EmptyShopCellColor
+                            : Color.Lerp(UpgradeColor(cell.Kind), Color.white, Mathf.Min(0.12f * (cell.Level - 1), 0.5f));
+                    }
                 }
             }
 
@@ -480,13 +522,23 @@ namespace Puckmite.View
 
             if (ShopCellAt(ScreenToWorld(screen), out int hoverCol, out int hoverRow))
             {
-                Vector2 center = BoardCells.CellCenter(_sim.BoardMin, _sim.BoardMax, hoverCol, hoverRow);
-                Vector2 size = BoardCells.CellSize(_sim.BoardMin, _sim.BoardMax);
-                Color ghost = UpgradeColor(_pendingCell);
-                ghost.a = 0.55f;
-                _pendingCellGhost.transform.localPosition = new Vector3(center.x, center.y, 0f);
-                _pendingCellGhost.transform.localScale = new Vector3(size.x * 0.96f, size.y * 0.96f, 1f);
-                _pendingCellGhost.color = ghost;
+                Vector2 center = BoardCells.CellCenter(boardMin, boardMax, hoverCol, hoverRow);
+                Sprite ghostArt = _shopUsesArt ? UpgradeSprite(_pendingCell, 1) : null;
+                if (ghostArt != null)
+                {
+                    FitCellSprite(_pendingCellGhost, center, cellSize, ghostArt);
+                    _pendingCellGhost.color = new Color(1f, 1f, 1f, 0.55f);
+                }
+                else
+                {
+                    Color ghost = UpgradeColor(_pendingCell);
+                    ghost.a = 0.55f;
+                    _pendingCellGhost.sprite = ProceduralSprites.Unit();
+                    _pendingCellGhost.transform.localPosition = new Vector3(center.x, center.y, 0f);
+                    _pendingCellGhost.transform.localScale = new Vector3(cellSize.x * 0.96f, cellSize.y * 0.96f, 1f);
+                    _pendingCellGhost.color = ghost;
+                }
+
                 _pendingCellGhost.enabled = true;
             }
         }

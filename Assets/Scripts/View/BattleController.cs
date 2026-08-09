@@ -176,6 +176,10 @@ namespace Puckmite.View
         private SpriteRenderer[] _buffCellViews; // the inner 3x3 quads, recoloured while corrupted
         private SpriteRenderer _holeView;        // dark quad over the hole cell while one is open
         private static readonly Color CorruptCellColor = new Color(0.36f, 0.10f, 0.16f);
+        // Multiply tint for corrupted art cells: red-shift that keeps the face readable (the flat
+        // CorruptCellColor as a tint would crush the frame to near-black).
+        private static readonly Color CorruptCellTint = new Color(0.95f, 0.35f, 0.45f);
+        private bool _boardUsesArt; // cell-sheet frames wired: cells are art, tinted white when clean
 
         // Diagnostics and controls for the debug panel.
         public float AiPlanMs => _aiPlanMs;
@@ -1515,18 +1519,43 @@ namespace Puckmite.View
             float full = BoardHalf * 2f;
 
             MakeQuad("Background", board, Vector2.zero, new Vector2(full, full), new Color(0.16f, 0.17f, 0.20f), 0);
-            // Inner 3x3 buff cells, coloured by kind (attack/shield) and brighter toward the stronger centre.
-            // The renderers are kept so UpdateBossEffectVisuals can recolour corrupted ones per frame.
             Vector2 boardMin = new Vector2(-BoardHalf, -BoardHalf);
             Vector2 boardMax = new Vector2(BoardHalf, BoardHalf);
             Vector2 buffCellSize = BoardCells.CellSize(boardMin, boardMax);
+
+            _boardUsesArt = _cellAttackSprite != null && _cellAttackStrongSprite != null
+                && _cellShieldSprite != null && _cellShieldStrongSprite != null && _cellDamageSprite != null;
+
+            // Outer damage ring: art wears the hazard frame; the flat board background already reads
+            // as it otherwise.
+            if (_boardUsesArt)
+            {
+                for (int row = 0; row < BoardCells.Size; row++)
+                {
+                    for (int col = 0; col < BoardCells.Size; col++)
+                    {
+                        if (BoardCells.TypeOf(col, row) != CellType.Damage)
+                        {
+                            continue;
+                        }
+
+                        MakeCellSprite("DamageCell", board, BoardCells.CellCenter(boardMin, boardMax, col, row), buffCellSize, _cellDamageSprite, 1);
+                    }
+                }
+            }
+
+            // Inner 3x3 buff cells, by kind (attack/shield) and stronger toward the centre — sheet frames,
+            // or coloured quads until the art exists. The renderers are kept so UpdateBossEffectVisuals
+            // can recolour corrupted ones per frame.
             _buffCellViews = new SpriteRenderer[9];
             for (int row = 1; row <= 3; row++)
             {
                 for (int col = 1; col <= 3; col++)
                 {
                     Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
-                    _buffCellViews[(row - 1) * 3 + (col - 1)] = MakeQuad("BuffCell", board, center, buffCellSize, BuffCellColor(col, row), 1);
+                    _buffCellViews[(row - 1) * 3 + (col - 1)] = _boardUsesArt
+                        ? MakeCellSprite("BuffCell", board, center, buffCellSize, BuffCellSprite(col, row), 1)
+                        : MakeQuad("BuffCell", board, center, buffCellSize, BuffCellColor(col, row), 1);
                 }
             }
 
@@ -1535,14 +1564,18 @@ namespace Puckmite.View
             _holeView = MakeQuad("Hole", board, Vector2.zero, buffCellSize, new Color(0.02f, 0.02f, 0.04f), 5);
             _holeView.enabled = false;
 
-            // Internal cell boundaries (the outermost boundaries are the walls, drawn below).
-            float[] gridLines = { -InnerHalf, -2.5f, 2.5f, InnerHalf };
-            Color gridColor = new Color(1f, 1f, 1f, 0.13f);
-            const float gridThickness = 0.08f;
-            foreach (float g in gridLines)
+            // Internal cell boundaries (the outermost boundaries are the walls, drawn below). The sheet
+            // frames carry their own borders, so the art board draws no extra lines.
+            if (!_boardUsesArt)
             {
-                MakeQuad("GridV", board, new Vector2(g, 0f), new Vector2(gridThickness, full), gridColor, 2);
-                MakeQuad("GridH", board, new Vector2(0f, g), new Vector2(full, gridThickness), gridColor, 2);
+                float[] gridLines = { -InnerHalf, -2.5f, 2.5f, InnerHalf };
+                Color gridColor = new Color(1f, 1f, 1f, 0.13f);
+                const float gridThickness = 0.08f;
+                foreach (float g in gridLines)
+                {
+                    MakeQuad("GridV", board, new Vector2(g, 0f), new Vector2(gridThickness, full), gridColor, 2);
+                    MakeQuad("GridH", board, new Vector2(0f, g), new Vector2(full, gridThickness), gridColor, 2);
+                }
             }
 
             Color wallColor = new Color(0.85f, 0.86f, 0.92f);
@@ -1551,6 +1584,19 @@ namespace Puckmite.View
             MakeQuad("WallBottom", board, new Vector2(0f, -BoardHalf), new Vector2(full + wallThickness, wallThickness), wallColor, 3);
             MakeQuad("WallLeft", board, new Vector2(-BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
             MakeQuad("WallRight", board, new Vector2(BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
+        }
+
+        // The sheet frame a buff cell wears: sword for attack, shield for shield, sparkles on the
+        // stronger centre (BuffValue 2).
+        private Sprite BuffCellSprite(int col, int row)
+        {
+            bool strong = BoardCells.BuffValue(col, row) >= 2;
+            if (BoardCells.KindOf(col, row) == BuffKind.Attack)
+            {
+                return strong ? _cellAttackStrongSprite : _cellAttackSprite;
+            }
+
+            return strong ? _cellShieldStrongSprite : _cellShieldSprite;
         }
 
         // Placeholder buff-cell tint: attack cells warm, shield cells cool, brighter at the stronger centre.
@@ -1928,7 +1974,9 @@ namespace Puckmite.View
                 for (int col = 1; col <= 3; col++)
                 {
                     bool corrupted = _debuffCells.Contains(col + row * BoardCells.Size);
-                    _buffCellViews[(row - 1) * 3 + (col - 1)].color = corrupted ? CorruptCellColor : BuffCellColor(col, row);
+                    _buffCellViews[(row - 1) * 3 + (col - 1)].color = _boardUsesArt
+                        ? (corrupted ? CorruptCellTint : Color.white)
+                        : (corrupted ? CorruptCellColor : BuffCellColor(col, row));
                 }
             }
 

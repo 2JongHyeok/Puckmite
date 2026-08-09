@@ -122,6 +122,9 @@ namespace Puckmite.EditorTools
                 ? "Assets/Art/Sprites/UI/battle_background"
                 : "Assets/Art/Sprites/UI/shop_background");
 
+            // Both boards' cell faces, one frame per face from the cell sheet.
+            WireCellSprites(controller);
+
             // Battle only: the hero art prefab for the player's character-row slot. Missing art is not
             // fatal — the controller falls back to its placeholder circle — so this only warns.
             if (controller is BattleController)
@@ -262,6 +265,38 @@ namespace Puckmite.EditorTools
                 else
                 {
                     SetOptionalSprite(controller, fields[i], "Assets/Art/Sprites/UI/" + fallbacks[i]);
+                }
+            }
+        }
+
+        private const string CellSheetPath = "Assets/Art/Sprites/UI/cell_sheet.aseprite";
+
+        // The board-cell faces live in one Aseprite sheet, one face per frame in draw order: attack,
+        // attack+sparkle (the stronger battle centre; shop level 2+), shield, shield+sparkle, damage
+        // hazard, plain empty. Reordering frames in the file shifts this mapping. Missing frames stay
+        // null and the scene keeps its flat placeholder cells.
+        private static void WireCellSprites(Object controller)
+        {
+            string[] fields =
+            {
+                "_cellAttackSprite", "_cellAttackStrongSprite", "_cellShieldSprite",
+                "_cellShieldStrongSprite", "_cellDamageSprite", "_cellEmptySprite",
+            };
+
+            Dictionary<string, Sprite> byName = new Dictionary<string, Sprite>();
+            foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(CellSheetPath))
+            {
+                if (asset is Sprite sprite)
+                {
+                    byName[sprite.name] = sprite;
+                }
+            }
+
+            for (int i = 0; i < fields.Length; i++)
+            {
+                if (byName.TryGetValue("Frame_" + i, out Sprite sheetSprite))
+                {
+                    SetReference(controller, fields[i], sheetSprite);
                 }
             }
         }
