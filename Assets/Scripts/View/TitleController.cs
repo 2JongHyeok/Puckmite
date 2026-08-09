@@ -28,8 +28,8 @@ namespace Puckmite.View
 
         // The difficulty picker (mock 2): a dark gold-framed box over the centre, five mock buttons,
         // the close X top-right (사용자 지정).
-        private static readonly Vector2 PanelCenter = new Vector2(0f, 0.8f);
-        private static readonly Vector2 PanelSize = new Vector2(21.5f, 22f);
+        private static readonly Vector2 PanelCenter = new Vector2(0f, 0.3f);
+        private static readonly Vector2 PanelSize = new Vector2(21.5f, 23f);
         private static readonly Vector2 DiffButtonSize = new Vector2(17.6f, 3.4f);
         private const float DiffFirstY = 6.8f;   // top button centre; the rest step down evenly
         private const float DiffStepY = 3.8f;
