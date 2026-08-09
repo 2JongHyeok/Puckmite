@@ -1857,6 +1857,14 @@ namespace Puckmite.View
         // are fitted to the row height; a missing icon renders as a tinted square so the slot is visible.
         private void BuildStatRows(Transform root, int actor, float x)
         {
+            // A boss's tall, wide art runs under its column — shove the whole column clear of the
+            // sprite's right edge instead (사용자 지정 2026-08-10: nothing ever stands right of the
+            // boss). 1.85 is the icon's leftmost reach below, 0.4 a sliver of air off the art.
+            if (actor != 0 && Campaign.IsBossRun && _bodyUsesArt[actor])
+            {
+                x = _characterBodies[actor].bounds.max.x + 2.25f;
+            }
+
             Sprite[] icons = { _healthIconSprite, _shieldIconSprite, _attackIconSprite, _stoneIconSprite };
             _statRowTexts[actor] = new TextMeshPro[StatRowCount];
             _statRowIcons[actor] = new SpriteRenderer[StatRowCount];
