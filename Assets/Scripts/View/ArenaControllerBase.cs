@@ -103,8 +103,10 @@ namespace Puckmite.View
         [SerializeField] protected Sprite _cellAttackStrongSprite; // Frame_1: sword + sparkles (stronger)
         [SerializeField] protected Sprite _cellShieldSprite;       // Frame_2: shield
         [SerializeField] protected Sprite _cellShieldStrongSprite; // Frame_3: shield + sparkles (stronger)
-        [SerializeField] protected Sprite _cellDamageSprite;       // Frame_4: hazard stripes
-        [SerializeField] protected Sprite _cellEmptySprite;        // Frame_5: plain
+        [SerializeField] protected Sprite _cellMaxHealthSprite;    // Frame_4: MAX heart (shop upgrade)
+        [SerializeField] protected Sprite _cellRunHealSprite;      // Frame_5: green heal heart (shop upgrade)
+        [SerializeField] protected Sprite _cellDamageSprite;       // Frame_6: hazard stripes
+        [SerializeField] protected Sprite _cellEmptySprite;        // Frame_7: plain
 
         private void BuildBackground()
         {
@@ -156,6 +158,72 @@ namespace Puckmite.View
             tmp.color = Color.white;
             tmp.GetComponent<MeshRenderer>().sortingOrder = 16;
             return tmp;
+        }
+
+        // --- Silhouette outline highlight, shared by the battle's characters and the shop's merchant ---
+
+        // Created and wired by Setup Game Scenes; as a material asset it also survives shader stripping
+        // in builds, which a runtime Shader.Find would not.
+        [SerializeField] protected Material _silhouetteMaterial;
+
+        // The outline is built from eight silhouette copies of the body, each pushed out one thickness
+        // step. Overlapping ghosts stack alpha, so a translucent state needs a per-ghost sliver of alpha
+        // (OutlineFaint) rather than RingFaint's 0.25 — stacked, it reads at about the same strength.
+        protected static readonly Vector2[] OutlineDirections =
+        {
+            new Vector2(1f, 0f), new Vector2(-1f, 0f), new Vector2(0f, 1f), new Vector2(0f, -1f),
+            new Vector2(0.7071f, 0.7071f), new Vector2(-0.7071f, 0.7071f),
+            new Vector2(0.7071f, -0.7071f), new Vector2(-0.7071f, -0.7071f),
+        };
+        protected const float OutlineThickness = 0.12f;      // world units the silhouettes are pushed out
+        protected const float HoverOutlineThickness = 0.2f;  // the hover state needs more presence: a
+                                                             // hairline vanished against the body art
+        protected static readonly Color OutlineFaint = new Color(1f, 0.9f, 0.25f, 0.07f);
+
+        // Eight silhouette ghosts parented under the body, so they inherit its transform (character art
+        // is scaled and re-centred) and, on show, its current sprite — the outline follows whatever the
+        // Animator is playing with no per-frame outline art.
+        protected SpriteRenderer[] BuildCharacterOutline(SpriteRenderer body)
+        {
+            if (_silhouetteMaterial == null)
+            {
+                Debug.LogError("[PuckHero] Silhouette material is not assigned — run Tools/PuckHero/Setup Game Scenes; character highlights are off.");
+                return new SpriteRenderer[0];
+            }
+
+            SpriteRenderer[] ghosts = new SpriteRenderer[OutlineDirections.Length];
+            float parentScale = body.transform.lossyScale.x; // uniform for both body kinds
+            for (int i = 0; i < ghosts.Length; i++)
+            {
+                GameObject go = new GameObject($"Outline{i}");
+                go.transform.SetParent(body.transform, false);
+                go.transform.localPosition = OutlineDirections[i] * (OutlineThickness / parentScale);
+
+                SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+                sr.sharedMaterial = _silhouetteMaterial;
+                sr.sortingOrder = 9; // just behind the body (10)
+                sr.enabled = false;
+                ghosts[i] = sr;
+            }
+
+            return ghosts;
+        }
+
+        // Shows or hides one body's outline, keeping the ghost sprites in step with the animating body.
+        // Thickness is per-state, so the offsets are recomputed against the body's scale on show.
+        protected static void SetSpriteOutline(SpriteRenderer[] ghosts, SpriteRenderer body, Color color, bool on, float thickness = OutlineThickness)
+        {
+            float parentScale = body.transform.lossyScale.x;
+            for (int i = 0; i < ghosts.Length; i++)
+            {
+                ghosts[i].enabled = on;
+                if (on)
+                {
+                    ghosts[i].sprite = body.sprite;
+                    ghosts[i].color = color;
+                    ghosts[i].transform.localPosition = OutlineDirections[i] * (thickness / parentScale);
+                }
+            }
         }
 
         private float _accumulator;

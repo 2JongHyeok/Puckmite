@@ -263,8 +263,11 @@ MonoBehaviour:
   _cellAttackStrongSprite: {fileID: 5144342635762240960, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellShieldSprite: {fileID: 6497133735845592826, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellShieldStrongSprite: {fileID: 7002738135808577354, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
-  _cellDamageSprite: {fileID: 8113658760455903481, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
-  _cellEmptySprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellMaxHealthSprite: {fileID: 8113658760455903481, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellRunHealSprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellDamageSprite: {fileID: -928380179603270380, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellEmptySprite: {fileID: -3083967269285103066, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _silhouetteMaterial: {fileID: 2100000, guid: 6734f8c9197b44641b2c935695892126, type: 2}
   _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
   _basicEnemyPrefab: {fileID: -2253911629886400664, guid: f125c0d64dc242048a6a8c2f2e319e87, type: 3}
   _strikerPrefab: {fileID: -2253911629886400664, guid: 887a01ef10569874c8b675c30cf6986a, type: 3}
@@ -277,7 +280,6 @@ MonoBehaviour:
   _shieldIconSprite: {fileID: -6791987299007039944, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _attackIconSprite: {fileID: 3994866376848337748, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _stoneIconSprite: {fileID: -3485401350434060962, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
-  _silhouetteMaterial: {fileID: 2100000, guid: 6734f8c9197b44641b2c935695892126, type: 2}
   _victoryPanelSprite: {fileID: 0}
   _victoryButtonSprite: {fileID: 0}
   _goldIconSprite: {fileID: 0}

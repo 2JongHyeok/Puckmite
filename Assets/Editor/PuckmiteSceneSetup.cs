@@ -18,6 +18,7 @@ namespace Puckmite.EditorTools
     {
         private const string TuningPath = "Assets/Settings/GameTuning.asset";
         private const string HeroArtPath = "Assets/Art/Sprites/Characters/Hero.aseprite";
+        private const string PeddlerArtPath = "Assets/Art/Sprites/Characters/Peddler.aseprite";
         private const string SilhouetteShaderName = "PuckHero/SpriteSilhouette";
         private const string SilhouetteMaterialPath = "Assets/Art/Materials/SpriteSilhouette.mat";
         private const string TitlePath = "Assets/Scenes/Title.unity";
@@ -125,6 +126,15 @@ namespace Puckmite.EditorTools
             // Both boards' cell faces, one frame per face from the cell sheet.
             WireCellSprites(controller);
 
+            // The silhouette material both scenes' highlight outlines draw with (battle characters, shop
+            // merchant), created next to its shader on first run. A real asset (not a runtime Material)
+            // so the scene reference keeps the shader in builds.
+            Material silhouette = EnsureSilhouetteMaterial();
+            if (silhouette != null)
+            {
+                SetReference(controller, "_silhouetteMaterial", silhouette);
+            }
+
             // Battle only: the hero art prefab for the player's character-row slot. Missing art is not
             // fatal — the controller falls back to its placeholder circle — so this only warns.
             if (controller is BattleController)
@@ -148,20 +158,26 @@ namespace Puckmite.EditorTools
                 WireEnemyPrefab(controller, "_bomberPrefab", "oak2");
                 WireEnemyPrefab(controller, "_anchorPrefab", "pig2");
 
-                // The character-outline silhouette material, created next to its shader on first run.
-                // A real asset (not a runtime Material) so the scene reference keeps the shader in builds.
-                Material silhouette = EnsureSilhouetteMaterial();
-                if (silhouette != null)
-                {
-                    SetReference(controller, "_silhouetteMaterial", silhouette);
-                }
-
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
                 SetOptionalSprite(controller, "_victoryPanelSprite", "Assets/Art/Sprites/UI/VictoryPanel");
                 SetOptionalSprite(controller, "_victoryButtonSprite", "Assets/Art/Sprites/UI/VictoryButton");
                 SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/Gold");
                 WireStatIcons(controller);
+            }
+            else
+            {
+                // Shop only: the peddler art for the merchant slot. Missing art is not fatal — the
+                // controller falls back to its placeholder circle — so this only warns.
+                GameObject peddlerArt = AssetDatabase.LoadAssetAtPath<GameObject>(PeddlerArtPath);
+                if (peddlerArt == null)
+                {
+                    Debug.LogWarning($"[PuckHero] {PeddlerArtPath} not found — the merchant keeps the placeholder circle.");
+                }
+                else
+                {
+                    SetReference(controller, "_merchantBodyPrefab", peddlerArt);
+                }
             }
 
             EditorSceneManager.SaveScene(scene, path);
@@ -272,15 +288,16 @@ namespace Puckmite.EditorTools
         private const string CellSheetPath = "Assets/Art/Sprites/UI/cell_sheet.aseprite";
 
         // The board-cell faces live in one Aseprite sheet, one face per frame in draw order: attack,
-        // attack+sparkle (the stronger battle centre; shop level 2+), shield, shield+sparkle, damage
-        // hazard, plain empty. Reordering frames in the file shifts this mapping. Missing frames stay
-        // null and the scene keeps its flat placeholder cells.
+        // attack+sparkle (the stronger battle centre; shop level 2+), shield, shield+sparkle, MAX-health
+        // heart, green heal heart, damage hazard, plain empty (8 frames since 2026-08-09). Reordering
+        // frames in the file shifts this mapping. Missing frames stay null and the scene keeps its flat
+        // placeholder cells.
         private static void WireCellSprites(Object controller)
         {
             string[] fields =
             {
-                "_cellAttackSprite", "_cellAttackStrongSprite", "_cellShieldSprite",
-                "_cellShieldStrongSprite", "_cellDamageSprite", "_cellEmptySprite",
+                "_cellAttackSprite", "_cellAttackStrongSprite", "_cellShieldSprite", "_cellShieldStrongSprite",
+                "_cellMaxHealthSprite", "_cellRunHealSprite", "_cellDamageSprite", "_cellEmptySprite",
             };
 
             Dictionary<string, Sprite> byName = new Dictionary<string, Sprite>();

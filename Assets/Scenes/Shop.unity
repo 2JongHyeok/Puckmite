@@ -263,8 +263,12 @@ MonoBehaviour:
   _cellAttackStrongSprite: {fileID: 5144342635762240960, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellShieldSprite: {fileID: 6497133735845592826, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
   _cellShieldStrongSprite: {fileID: 7002738135808577354, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
-  _cellDamageSprite: {fileID: 8113658760455903481, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
-  _cellEmptySprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellMaxHealthSprite: {fileID: 8113658760455903481, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellRunHealSprite: {fileID: -6292094657777443381, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellDamageSprite: {fileID: -928380179603270380, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _cellEmptySprite: {fileID: -3083967269285103066, guid: 3281587a31bffec4aa37d86fb6214cce, type: 3}
+  _silhouetteMaterial: {fileID: 2100000, guid: 6734f8c9197b44641b2c935695892126, type: 2}
+  _merchantBodyPrefab: {fileID: -2253911629886400664, guid: 0d206ccf48cba264aa95d924c2477f11, type: 3}
 --- !u!4 &1264881507
 Transform:
   m_ObjectHideFlags: 0

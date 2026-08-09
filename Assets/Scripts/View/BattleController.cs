@@ -85,10 +85,6 @@ namespace Puckmite.View
         [SerializeField] private Sprite _stoneIconSprite;
 
         // Flat-colour silhouette material (PuckHero/SpriteSilhouette) behind the character outline.
-        // Created and wired by Setup Game Scenes; as a material asset it also survives shader stripping
-        // in builds, which a runtime Shader.Find would not.
-        [SerializeField] private Material _silhouetteMaterial;
-
         // Victory panel art (promised paths UI/VictoryPanel·VictoryButton·Gold — 디자인은 사용자가 추후).
         [SerializeField] private Sprite _victoryPanelSprite;
         [SerializeField] private Sprite _victoryButtonSprite;
@@ -2147,66 +2143,10 @@ namespace Puckmite.View
             }
         }
 
-        // The outline is built from eight silhouette copies of the body, each pushed out one thickness
-        // step. Overlapping ghosts stack alpha, so a translucent state needs a per-ghost sliver of alpha
-        // (OutlineFaint) rather than RingFaint's 0.25 — stacked, it reads at about the same strength.
-        private static readonly Vector2[] OutlineDirections =
-        {
-            new Vector2(1f, 0f), new Vector2(-1f, 0f), new Vector2(0f, 1f), new Vector2(0f, -1f),
-            new Vector2(0.7071f, 0.7071f), new Vector2(-0.7071f, 0.7071f),
-            new Vector2(0.7071f, -0.7071f), new Vector2(-0.7071f, -0.7071f),
-        };
-        private const float OutlineThickness = 0.12f;      // world units the silhouettes are pushed out
-        private const float HoverOutlineThickness = 0.2f;  // the hover link needs more presence: the red
-                                                           // hairline vanished against the enemy circles
-        private static readonly Color OutlineFaint = new Color(1f, 0.9f, 0.25f, 0.07f);
-
-        // Eight silhouette ghosts parented under the body, so they inherit its transform (the hero art
-        // is scaled and re-centred) and, on show, its current sprite — the outline follows whatever the
-        // Animator is playing with no per-frame outline art.
-        private SpriteRenderer[] BuildCharacterOutline(SpriteRenderer body)
-        {
-            if (_silhouetteMaterial == null)
-            {
-                Debug.LogError("[PuckHero] Silhouette material is not assigned — run Tools/PuckHero/Setup Game Scenes; character highlights are off.");
-                return new SpriteRenderer[0];
-            }
-
-            SpriteRenderer[] ghosts = new SpriteRenderer[OutlineDirections.Length];
-            float parentScale = body.transform.lossyScale.x; // uniform for both body kinds
-            for (int i = 0; i < ghosts.Length; i++)
-            {
-                GameObject go = new GameObject($"Outline{i}");
-                go.transform.SetParent(body.transform, false);
-                go.transform.localPosition = OutlineDirections[i] * (OutlineThickness / parentScale);
-
-                SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
-                sr.sharedMaterial = _silhouetteMaterial;
-                sr.sortingOrder = 9; // just behind the body (10)
-                sr.enabled = false;
-                ghosts[i] = sr;
-            }
-
-            return ghosts;
-        }
-
-        // Shows or hides one actor's outline, keeping the ghost sprites in step with the animating body.
-        // Thickness is per-state, so the offsets are recomputed against the body's scale on show.
+        // One actor's outline, via the base silhouette-ghost machinery (built in BuildCharacters).
         private void SetOutline(int actor, Color color, bool on, float thickness = OutlineThickness)
         {
-            SpriteRenderer[] ghosts = _characterOutlines[actor];
-            SpriteRenderer body = _characterBodies[actor];
-            float parentScale = body.transform.lossyScale.x;
-            for (int i = 0; i < ghosts.Length; i++)
-            {
-                ghosts[i].enabled = on;
-                if (on)
-                {
-                    ghosts[i].sprite = body.sprite;
-                    ghosts[i].color = color;
-                    ghosts[i].transform.localPosition = OutlineDirections[i] * (thickness / parentScale);
-                }
-            }
+            SetSpriteOutline(_characterOutlines[actor], _characterBodies[actor], color, on, thickness);
         }
 
         // Outline states while the player is picking a target (design doc 3.5 step 4): the attacker is

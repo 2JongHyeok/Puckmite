@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Puckmite.Game;
 using Puckmite.Sim;
+using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -20,6 +21,11 @@ namespace Puckmite.View
         private const float MerchantRadius = 2.2f;
         // Standing on the backdrop's grass line, by the campfire (user mock 2026-08-09).
         private const float MerchantY = CharFeetY + MerchantRadius;
+        // Peddler art: the battle characters' pixel scale (their CharArtScale), so the merchant shares
+        // the grid. The label floats over the head and bobs gently to advertise the click (사용자 지정).
+        private const float MerchantArtScale = 7.9f;
+        private const float LabelBobAmplitude = 0.3f;
+        private const float LabelBobSpeed = 2.4f; // radians/sec
 
         // The upgrade board: no damage cells and no fixed layout — every cell starts blank and is coloured by
         // whatever the player has bought onto it (design doc 5.1). Cell quads are kept so UpdateShopCells can
@@ -28,6 +34,16 @@ namespace Puckmite.View
         private SpriteRenderer _merchantView;
         private SpriteRenderer _pendingCellGhost;
         private bool _shopUsesArt; // cell-sheet frames wired: cells wear frames, flat quads otherwise
+
+        // The merchant's click affordances: silhouette outline (faint = clickable, bright = hovered) and
+        // the floating "상점 열기" label. The click/hover disc comes from the art bounds, like the battle
+        // characters', or from the placeholder circle's constants.
+        [SerializeField] private GameObject _merchantBodyPrefab; // Peddler.aseprite prefab, wired by Setup
+        private SpriteRenderer[] _merchantOutline;
+        private GameObject _merchantLabelRoot;
+        private float _merchantLabelBaseY;
+        private Vector2 _merchantCenter;
+        private float _merchantGrabRadius;
 
         // One merchant slot: an upgrade cell, or (rarely) a battle stone in the same slot (design doc 5.3).
         private enum OfferType
@@ -145,6 +161,7 @@ namespace Puckmite.View
             DriveSimulation();
             UpdatePuckTransforms();
             UpdateShopCells();
+            UpdateMerchantHighlight();
             UpdateGhost();
         }
 
@@ -233,14 +250,16 @@ namespace Puckmite.View
         }
 
         // The sheet frame a bought cell wears — sparkles from level 2, the battle centre's "sparkles mean
-        // stronger" rule. RunHeal/MaxHealth have no sheet art yet: null keeps the colour quad.
+        // stronger" rule. RunHeal/MaxHealth have one face each (no sparkle variant drawn yet); a missing
+        // frame returns null and the cell keeps the colour quad.
         private Sprite UpgradeSprite(UpgradeKind kind, int level)
         {
             switch (kind)
             {
                 case UpgradeKind.Attack: return level >= 2 ? _cellAttackStrongSprite : _cellAttackSprite;
                 case UpgradeKind.Shield: return level >= 2 ? _cellShieldStrongSprite : _cellShieldSprite;
-                default: return null;
+                case UpgradeKind.RunHeal: return _cellRunHealSprite;
+                default: return _cellMaxHealthSprite;
             }
         }
 
@@ -414,15 +433,25 @@ namespace Puckmite.View
             MakeQuad("WallRight", board, new Vector2(BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
 
             // The merchant stands by the campfire, left of the board; clicking opens the buying screen.
-            GameObject merchantGo = new GameObject("Merchant");
-            merchantGo.transform.SetParent(transform, false);
-            float d = MerchantRadius * 2f;
-            merchantGo.transform.localPosition = new Vector3(MerchantX, MerchantY, 0f);
-            merchantGo.transform.localScale = new Vector3(d, d, 1f);
-            _merchantView = merchantGo.AddComponent<SpriteRenderer>();
-            _merchantView.sprite = ProceduralSprites.Circle();
-            _merchantView.color = new Color(0.85f, 0.75f, 0.45f);
-            _merchantView.sortingOrder = 10;
+            _merchantView = TryBuildMerchantBody();
+            if (_merchantView == null)
+            {
+                GameObject merchantGo = new GameObject("Merchant");
+                merchantGo.transform.SetParent(transform, false);
+                float d = MerchantRadius * 2f;
+                merchantGo.transform.localPosition = new Vector3(MerchantX, MerchantY, 0f);
+                merchantGo.transform.localScale = new Vector3(d, d, 1f);
+                _merchantView = merchantGo.AddComponent<SpriteRenderer>();
+                _merchantView.sprite = ProceduralSprites.Circle();
+                _merchantView.color = new Color(0.85f, 0.75f, 0.45f);
+                _merchantView.sortingOrder = 10;
+                _merchantCenter = new Vector2(MerchantX, MerchantY);
+                _merchantGrabRadius = MerchantRadius;
+            }
+
+            // Faint at rest ("this is clickable"), bright under the cursor — the battle characters' language.
+            _merchantOutline = BuildCharacterOutline(_merchantView);
+            BuildMerchantLabel();
 
             // Ghost of the cell being carried from the shop, snapped to whichever board cell is hovered.
             GameObject pending = new GameObject("PendingCellGhost");
@@ -433,6 +462,104 @@ namespace Puckmite.View
             _pendingCellGhost.enabled = false;
 
             MakeInfoBox("ShopBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = "상점";
+        }
+
+        // The peddler art (Peddler.aseprite prefab): the battle characters' pixel scale, feet on the
+        // grass line, aligned by bounds since the import pivot sits below the feet. Returns null when
+        // the art is missing or broken, and the caller falls back to the circle.
+        private SpriteRenderer TryBuildMerchantBody()
+        {
+            if (_merchantBodyPrefab == null)
+            {
+                return null;
+            }
+
+            GameObject go = Instantiate(_merchantBodyPrefab, transform, false);
+            go.name = "Merchant";
+
+            SpriteRenderer sr = go.GetComponentInChildren<SpriteRenderer>();
+            if (sr == null || sr.sprite == null)
+            {
+                Debug.LogError("[PuckHero] Peddler prefab has no usable SpriteRenderer — using the placeholder circle.");
+                Destroy(go);
+                return null;
+            }
+
+            sr.sortingOrder = 10;
+            sr.color = Color.white;
+
+            if (go.TryGetComponent(out Animator animator))
+            {
+                animator.speed = 0.5f; // idle plays at half speed, like the battle bodies
+            }
+
+            go.transform.localPosition = new Vector3(MerchantX, CharFeetY, 0f);
+            go.transform.localScale *= MerchantArtScale;
+            float height = sr.bounds.size.y;
+            Vector3 target = transform.TransformPoint(new Vector3(MerchantX, CharFeetY + height * 0.5f, 0f));
+            go.transform.position += target - sr.bounds.center;
+
+            _merchantCenter = new Vector2(MerchantX, CharFeetY + height * 0.5f);
+            _merchantGrabRadius = height * 0.6f;
+            return sr;
+        }
+
+        // "상점 열기" floats over the merchant's head — plain Korean text, no box — telling what the
+        // click does. UpdateMerchantHighlight bobs it.
+        private void BuildMerchantLabel()
+        {
+            _merchantLabelRoot = new GameObject("MerchantLabel");
+            _merchantLabelRoot.transform.SetParent(transform, false);
+
+            TextMeshPro tmp = _merchantLabelRoot.AddComponent<TextMeshPro>();
+            if (KoreanFont.Asset() != null)
+            {
+                tmp.font = KoreanFont.Asset();
+            }
+
+            tmp.text = "상점 열기";
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.fontSize = 6f;
+            tmp.rectTransform.sizeDelta = new Vector2(8f, 2f);
+            tmp.color = new Color(1f, 0.92f, 0.55f); // warm, toward the highlight yellow
+            tmp.GetComponent<MeshRenderer>().sortingOrder = 15;
+
+            _merchantLabelBaseY = _merchantView.bounds.max.y + 1.1f;
+            _merchantLabelRoot.transform.localPosition = new Vector3(MerchantX, _merchantLabelBaseY, 0f);
+        }
+
+        // Merchant affordances, per frame: the label bobs over the head, the outline sits faint ("this
+        // is clickable") and lights up under the cursor. All of it goes down once throwing starts or a
+        // modal is up — the merchant no longer opens then, and the promise would be a lie.
+        private void UpdateMerchantHighlight()
+        {
+            if (_merchantOutline == null)
+            {
+                return;
+            }
+
+            bool clickable = !_shopThrowing && !_merchantOpen && !_confirmReplaceOpen;
+            _merchantLabelRoot.SetActive(clickable);
+            if (!clickable)
+            {
+                SetSpriteOutline(_merchantOutline, _merchantView, default, false);
+                return;
+            }
+
+            float bob = Mathf.Sin(Time.time * LabelBobSpeed) * LabelBobAmplitude;
+            _merchantLabelRoot.transform.localPosition = new Vector3(MerchantX, _merchantLabelBaseY + bob, 0f);
+
+            bool hovered = false;
+            Mouse mouse = Mouse.current;
+            if (mouse != null)
+            {
+                Vector2 screen = mouse.position.ReadValue();
+                hovered = !PointerOverShopGui(screen)
+                    && (ScreenToWorld(screen) - _merchantCenter).magnitude <= _merchantGrabRadius;
+            }
+
+            SetSpriteOutline(_merchantOutline, _merchantView, hovered ? RingStrong : OutlineFaint, true,
+                hovered ? HoverOutlineThickness : OutlineThickness);
         }
 
         // Every shop stone starts in hand and comes in off the bottom wall.
@@ -491,7 +618,7 @@ namespace Puckmite.View
                     }
                     else
                     {
-                        // Flat board, or a RunHeal/MaxHealth cell (no sheet art yet): the colour language.
+                        // Flat board, or a kind whose sheet frame is missing: the colour language.
                         view.sprite = ProceduralSprites.Unit();
                         view.transform.localScale = new Vector3(cellSize.x * 0.96f, cellSize.y * 0.96f, 1f);
                         view.transform.localPosition = new Vector3(center.x, center.y, 0f);
@@ -582,7 +709,7 @@ namespace Puckmite.View
             }
 
             if (mouse.leftButton.wasPressedThisFrame && !overGui && !_shopThrowing
-                && (world - new Vector2(MerchantX, MerchantY)).magnitude <= MerchantRadius)
+                && (world - _merchantCenter).magnitude <= _merchantGrabRadius)
             {
                 _merchantOpen = true;
                 return;
@@ -797,6 +924,8 @@ namespace Puckmite.View
             float tableY = Screen.height * 0.42f;
             GUI.Box(new Rect(midX - 330f, tableY, 660f, 190f), GUIContent.none);
 
+            GUIStyle centered = new GUIStyle(rich) { alignment = TextAnchor.MiddleCenter };
+
             for (int slot = 0; slot < _shopOffers.Count; slot++)
             {
                 Rect card = new Rect(midX - 310f + slot * 215f, tableY + 20f, 190f, 150f);
@@ -813,7 +942,7 @@ namespace Puckmite.View
                 {
                     int stonePrice = _tuning.BattleStonePrice;
                     GUI.enabled = Campaign.Gold >= stonePrice && !_shopThrowing;
-                    if (GUI.Button(card, "Battle stone\n\n+1 stone in battle"))
+                    if (GUI.Button(card, "전투 스톤 +1"))
                     {
                         BuyBattleStone(slot);
                     }
@@ -837,11 +966,32 @@ namespace Puckmite.View
                 bool affordable = Campaign.Gold >= price && !_shopThrowing;
 
                 GUI.enabled = affordable;
-                if (GUI.Button(card, $"{UpgradeName(kind)}\n\n+{GainOf(kind)} per point"))
+                if (GUI.Button(card, GUIContent.none))
                 {
                     BuyCell(slot);
                 }
                 GUI.enabled = true;
+
+                // The card face is the cell itself — its sheet frame at a crisp 2x, nothing else
+                // (사용자 지정: per-point 문구 제거, 상세는 호버 툴팁이 말한다). Text face only while
+                // the art is missing.
+                Sprite face = UpgradeSprite(kind, 1);
+                if (face != null)
+                {
+                    const float side = 100f; // the 50px frame at exactly 2x stays pixel-crisp
+                    Rect artRect = new Rect(card.center.x - side * 0.5f, card.center.y - side * 0.5f, side, side);
+                    Color guiColor = GUI.color;
+                    GUI.color = affordable ? Color.white : new Color(1f, 1f, 1f, 0.4f);
+                    Rect tr = face.textureRect;
+                    Rect uv = new Rect(tr.x / face.texture.width, tr.y / face.texture.height,
+                        tr.width / face.texture.width, tr.height / face.texture.height);
+                    GUI.DrawTextureWithTexCoords(artRect, face.texture, uv);
+                    GUI.color = guiColor;
+                }
+                else
+                {
+                    GUI.Label(card, UpgradeName(kind), centered);
+                }
 
                 GUI.Label(new Rect(card.x + 70f, card.yMax + 2f, 120f, 24f), GoldTag(price), rich);
 
