@@ -102,6 +102,13 @@ namespace Puckmite.View
         private TextMeshPro _turnText; // the left info column's turn line ("플레이어 턴" / "적 턴 진행중…")
         private float _turnDotTimer;
 
+        private const float TooltipWidth = 7.5f;
+        private const float TooltipHeight = 4.2f;
+        private GameObject _tooltipRoot;    // enemy tooltip: creature name + ability, beside the hovered body
+        private TextMeshPro _tooltipTitle;
+        private TextMeshPro _tooltipBody;
+        private int _tooltipActor = -1;     // actor the tooltip is parked on, -1 = hidden
+
         // Top character row (design doc 2.2). Each actor's buff is a snapshot taken when its own turn
         // ends (Σ cellValue*stoneLevel), held until its next turn (design doc 3.6/3.7).
         private TextMeshPro[][] _statRowTexts;     // [actor][row]: the number next to each stat icon
@@ -276,6 +283,7 @@ namespace Puckmite.View
             BuildCharacters();
             BuildVictoryPanel();
             BuildInfoBoxes();
+            BuildEnemyTooltip();
             BuildGhost();
             BuildPreviewLine();
             BuildPreviewMarker();
@@ -530,6 +538,7 @@ namespace Puckmite.View
             UpdateHoverHighlight(); // before the character row, which reads the hovered enemy
             UpdateCharacterStats();
             UpdateTurnLine();
+            UpdateEnemyTooltip();
 
             // The victory panel runs its own pointer work: board input is already dead (_gameOver).
             if (_victoryPanel != null && _victoryPanel.IsShown && Mouse.current != null)
@@ -1649,10 +1658,11 @@ namespace Puckmite.View
                 root.transform.SetParent(transform, false);
 
                 // Body first: art bodies and the placeholder circle stand on the same feet line but
-                // differ in height, and the ring and hit disc follow whichever body was built.
+                // differ in height, and the ring and hit disc follow whichever body was built. The
+                // stage-1 boss keeps the circle — it rolls as Basic but is not a slime; its art is TBD.
                 SpriteRenderer body = actor == 0
                     ? TryBuildHeroBody(root.transform, x)
-                    : TryBuildEnemyBody(root.transform, x, _actorTypes[actor]);
+                    : IsStage1Boss ? null : TryBuildEnemyBody(root.transform, x, _actorTypes[actor]);
                 if (body != null)
                 {
                     _bodyUsesArt[actor] = true;
@@ -2241,6 +2251,128 @@ namespace Puckmite.View
             tmp.color = Color.white;
             tmp.GetComponent<MeshRenderer>().sortingOrder = 16;
             return tmp;
+        }
+
+        // The enemy tooltip (사용자 지정): creature name and ability while the cursor rests on a living
+        // enemy's body. Parked on the enemy's right (사용자 지정), clear of the stat columns; stone hover
+        // keeps its outline link only, so aiming drags do not flicker a tooltip.
+        private void BuildEnemyTooltip()
+        {
+            _tooltipRoot = new GameObject("EnemyTooltip");
+            _tooltipRoot.transform.SetParent(transform, false);
+
+            GameObject bgGo = new GameObject("Bg");
+            bgGo.transform.SetParent(_tooltipRoot.transform, false);
+            bgGo.transform.localScale = new Vector3(TooltipWidth, TooltipHeight, 1f);
+            SpriteRenderer bg = bgGo.AddComponent<SpriteRenderer>();
+            bg.sprite = ProceduralSprites.Unit();
+            bg.color = new Color(0.10f, 0.12f, 0.18f, 0.95f);
+            bg.sortingOrder = 17;
+
+            _tooltipTitle = MakeTooltipText("Title", new Vector2(0f, TooltipHeight * 0.5f - 0.85f), new Vector2(TooltipWidth - 0.8f, 1.1f), 7f);
+            _tooltipTitle.fontStyle = FontStyles.Bold;
+            _tooltipBody = MakeTooltipText("Body", new Vector2(0f, -0.5f), new Vector2(TooltipWidth - 0.9f, TooltipHeight - 2.1f), 5f);
+
+            _tooltipRoot.SetActive(false);
+        }
+
+        private TextMeshPro MakeTooltipText(string name, Vector2 pos, Vector2 box, float maxSize)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(_tooltipRoot.transform, false);
+            go.transform.localPosition = pos;
+
+            TextMeshPro tmp = go.AddComponent<TextMeshPro>();
+            if (KoreanFont.Asset() != null)
+            {
+                tmp.font = KoreanFont.Asset();
+            }
+
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 1f;
+            tmp.fontSizeMax = maxSize;
+            tmp.rectTransform.sizeDelta = box;
+            tmp.color = Color.white;
+            tmp.GetComponent<MeshRenderer>().sortingOrder = 18;
+            return tmp;
+        }
+
+        // Tooltip copy (사용자 지정 2026-08-09): creature names instead of kind labels; abilities from
+        // design doc 4.3. The numbers already live on the stat column, so none are repeated here.
+        private static string TooltipName(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.Striker: return "도적";
+                case EnemyType.Tank: return "분홍 돼지";
+                case EnemyType.Twin: return "해골 도적";
+                case EnemyType.HardStone: return "갈색 오크 전사";
+                case EnemyType.Bomber: return "회색 오크 전사";
+                case EnemyType.Anchor: return "붉은 돼지";
+                default: return "슬라임"; // Basic (Sniper never spawns — design doc 4.3)
+            }
+        }
+
+        private static string TooltipAbility(EnemyType type)
+        {
+            switch (type)
+            {
+                case EnemyType.Striker: return "공격력이 높지만 체력이 낮다.";
+                case EnemyType.Tank: return "체력이 높지만 공격력이 낮다.";
+                case EnemyType.Twin: return "스톤을 2개 가진다.";
+                case EnemyType.HardStone: return "스톤이 단단하다 (체력 +2).";
+                case EnemyType.Bomber: return "2턴마다 폭탄 스톤을 굴린다. 폭탄은 플레이어 스톤과 충돌하면 자폭해 주변에 2 피해를 주고 밀쳐낸다.";
+                case EnemyType.Anchor: return "스톤이 충돌에 밀리지 않고 그대로 되돌려친다.";
+                default: return "특별한 능력이 없다.";
+            }
+        }
+
+        private void UpdateEnemyTooltip()
+        {
+            if (_tooltipRoot == null)
+            {
+                return;
+            }
+
+            int actor = -1;
+            if (!_gameOver && Mouse.current != null)
+            {
+                Vector2 screen = Mouse.current.position.ReadValue();
+                if (!PointerOverHud(screen))
+                {
+                    int at = CharacterAt(ScreenToWorld(screen));
+                    if (at > 0 && !_actorDead[at])
+                    {
+                        actor = at;
+                    }
+                }
+            }
+
+            if (actor < 0)
+            {
+                if (_tooltipActor != -1)
+                {
+                    _tooltipRoot.SetActive(false);
+                    _tooltipActor = -1;
+                }
+
+                return;
+            }
+
+            if (actor != _tooltipActor)
+            {
+                _tooltipActor = actor;
+                bool boss = IsStage1Boss;
+                _tooltipTitle.text = boss ? "???" : TooltipName(_actorTypes[actor]);
+                _tooltipBody.text = boss
+                    ? "매 턴 보드를 바꾼다 — 칸 오염, 구멍, 전체 피해 중 하나."
+                    : TooltipAbility(_actorTypes[actor]);
+
+                float x = CharacterX(actor) + _characterGrabRadius[actor] + TooltipWidth * 0.5f + 0.6f;
+                _tooltipRoot.transform.localPosition = new Vector3(x, _characterCenterY[actor], 0f);
+                _tooltipRoot.SetActive(true);
+            }
         }
 
         // "적 턴 진행중." with the dot count cycling 1→2→3 marks the enemy acting (사용자 지정, 0.4s a
