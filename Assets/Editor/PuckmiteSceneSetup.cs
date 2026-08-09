@@ -185,6 +185,7 @@ namespace Puckmite.EditorTools
                 SetOptionalSprite(controller, "_victoryButtonSprite", "Assets/Art/Sprites/UI/VictoryButton");
                 SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/Gold");
                 SetOptionalSprite(controller, "_skipButtonSprite", "Assets/Art/Sprites/UI/btn_skip_roll");
+                WireAudioClip(controller, "_sfxBossSkill", "Assets/Sound/SFX/boss_skill.wav");
                 WireStatIcons(controller);
             }
             else

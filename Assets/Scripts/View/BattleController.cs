@@ -146,6 +146,11 @@ namespace Puckmite.View
         private SpriteRenderer _skipBg;
         private bool _skipUsesArt;
 
+        // The boss's cast sound (사용자 사운드 2026-08-10, Sound/SFX/boss_skill.wav — 2.78s, RMS 0.141):
+        // plays with the ability, and the roll waits for it to finish plus half a second.
+        [SerializeField] private AudioClip _sfxBossSkill;
+        private const float BossSkillGain = 0.45f;
+
         // Hit blink (사용자 지정 2026-08-10): a struck character flickers visible/invisible for a beat.
         private const float HitFlashDuration = 0.48f;
         private const float HitFlashInterval = 0.08f;
@@ -637,6 +642,13 @@ namespace Puckmite.View
                     {
                         ExpireBossEffects();
                         CastBossAbility();
+                        if (_sfxBossSkill != null)
+                        {
+                            // The roll waits out the cast sound plus a breath (사용자 지정 2026-08-10:
+                            // 사운드가 끝나고 0.5초 뒤 굴림) — the AI think timer carries the wait.
+                            GameAudio.PlaySfx(_sfxBossSkill, BossSkillGain);
+                            _enemyThinkTimer = _sfxBossSkill.length + 0.5f;
+                        }
                     }
 
                     // 자폭형 (design doc 4.3): its bomb flies only every second turn — on the off turns it
