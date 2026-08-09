@@ -94,6 +94,47 @@ namespace Puckmite.View
         // (사용자 지정 2026-08-09) — the buying panel does not cover it, so it never disappears.
         private TextMeshPro _goldReadoutText;
 
+        // The player standing top-centre with battle-style stat rows (사용자 지정 2026-08-10): health
+        // carry/max, shield, attack, battle stones — live campaign values, and the target the leave
+        // settlement's icons fly to. Art and icons wired by Setup; battle's row geometry, mirrored.
+        [SerializeField] private GameObject _heroBodyPrefab;
+        [SerializeField] private Sprite _healthIconSprite;
+        [SerializeField] private Sprite _shieldIconSprite;
+        [SerializeField] private Sprite _attackIconSprite;
+        private const float HeroX = 0f;
+        private const float HeroBodyHeight = 6.4f;  // battle's CharBodyHeight
+        private const float StatRowHeight = 1.1f;
+        private const int StatRowCount = 4;         // top to bottom: health, shield, attack, stones
+        private const float StatBlockBottom = CharFeetY + HeroBodyHeight + 0.4f;
+        private TextMeshPro[] _statRowTexts;
+        private Vector2[] _statRowIconPos;          // world centre of each row's icon, the flight targets
+
+        // The leave settlement flight (사용자 지정 2026-08-10): one icon per settled point rises from its
+        // board cell to its stat row, the shown number ticking up as each lands; the campaign state is
+        // already final when the flight starts (display only), then the next run loads after a beat.
+        private const float SettleFlightDuration = 0.4f;
+        private const float SettleFlightStagger = 0.06f;
+        private const float SettleFlightLead = 0.15f;  // breath between the click and the first launch
+        private const float SettleLoadBeat = 0.35f;    // pause after the last landing, before the scene
+        private struct SettleFlight
+        {
+            public int Row;           // stat row it flies to (0 health, 1 shield, 2 attack)
+            public int LandDelta;     // shown-stat bump on landing (run-heal lands silently)
+            public Vector2 From;
+            public float Start;
+            public Vector3 CenterOffset; // sprite pivot-to-bounds-centre shim, fixed at spawn
+            public GameObject Go;
+            public bool Landed;
+        }
+        private readonly List<SettleFlight> _flights = new List<SettleFlight>();
+        private readonly List<int> _settleCells = new List<int>(); // reused per stone, like the sim's
+        private bool _leaving;
+        private float _leaveClock;
+        private float _leaveLoadTimer;
+        private int _shownMaxHealth;
+        private int _shownShield;
+        private int _shownAttack;
+
         // One merchant slot: an upgrade cell, or (rarely) a battle stone in the same slot (design doc 5.3).
         private enum OfferType
         {
@@ -155,6 +196,7 @@ namespace Puckmite.View
         protected override void BuildMode()
         {
             BuildShopBoard();
+            BuildShopHero();
             BuildPuckViews();
             BuildGhost();
             BuildPreviewLine();
@@ -211,20 +253,36 @@ namespace Puckmite.View
             // The upgrade board has no turns, no enemies and no attacks — just throwing stones onto cells.
             HandleShopInput();
             DriveSimulation();
+
+            // A rolled stone must come to rest before the next steps up (사용자 지정 2026-08-10): the
+            // launch no longer stages its successor — it appears here, once the board settles.
+            if (_shopThrowing && !_leaving && !_ghostActive && _handReady[0].Count > 0 && _sim.AllAtRest())
+            {
+                SetupGhost(0);
+            }
+
             UpdatePuckTransforms();
             UpdateShopCells();
             UpdateMerchantHighlight();
             UpdateMerchantPanel();
             UpdateShopSideUi();
+            UpdateShopHeroStats();
+            TickLeaveFlights();
             UpdateGhost();
         }
 
         // --- Shop flow ----------------------------------------------------------------------------
 
         // Leaving settles the board as it stands: whatever the stones are sitting on is what gets bought
-        // into the player's stats for good (design doc 5.2/5.5). Then on to the next run.
+        // into the player's stats for good (design doc 5.2/5.5). The campaign lands in full right here —
+        // the icon flight that follows is display only (사용자 지정 2026-08-10), so a reload mid-flight
+        // cannot double-settle. With nothing settled it goes straight on to the next run, as before.
         private void LeaveShop()
         {
+            _shownMaxHealth = _tuning.PlayerBaseHealth + Campaign.BonusMaxHealth;
+            _shownShield = _tuning.PlayerBaseShield + Campaign.BonusShield;
+            _shownAttack = _tuning.PlayerBaseAttack + Campaign.BonusAttack;
+
             UpgradeTotals gained = Campaign.ShopBoard.SumUpgrades(_sim, OccupancyThreshold);
             Campaign.BonusAttack += gained.Attack * _tuning.GainAttack;
             Campaign.BonusShield += gained.Shield * _tuning.GainShield;
@@ -232,7 +290,182 @@ namespace Puckmite.View
             Campaign.BonusMaxHealth += gained.MaxHealth * _tuning.GainMaxHealth;
 
             Campaign.AdvanceRun();
-            GameFlow.LoadBattle();
+
+            if (BuildSettleFlights() == 0)
+            {
+                GameFlow.LoadBattle();
+                return;
+            }
+
+            _leaving = true;
+            _leaveClock = 0f;
+            _leaveLoadTimer = 0f;
+        }
+
+        // One flight per settled point, launched from the cell that earned it — the same walk as
+        // ShopBoard.SumUpgrades, per (stone, cell) pair so the icons rise from where the value sits.
+        private int BuildSettleFlights()
+        {
+            _flights.Clear();
+            float start = SettleFlightLead;
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                Puck p = pucks[i];
+                BoardCells.GetOccupiedCells(_sim.BoardMin, _sim.BoardMax, p.Position, p.Radius, OccupancyThreshold, _settleCells);
+                for (int c = 0; c < _settleCells.Count; c++)
+                {
+                    int index = _settleCells[c];
+                    int col = index % BoardCells.Size;
+                    int row = index / BoardCells.Size;
+                    ShopCell cell = Campaign.ShopBoard.CellAt(col, row);
+                    if (cell.IsEmpty)
+                    {
+                        continue;
+                    }
+
+                    int points = cell.Level * p.Level;
+                    Vector2 from = BoardCells.CellCenter(_sim.BoardMin, _sim.BoardMax, col, row);
+                    for (int n = 0; n < points; n++)
+                    {
+                        SpawnSettleFlight(cell.Kind, from, start);
+                        start += SettleFlightStagger;
+                    }
+                }
+            }
+
+            return _flights.Count;
+        }
+
+        // Attack and shield fly to their rows; run-heal and max-health both fly to the health row
+        // (사용자 지정 2026-08-10 — battle keeps its four rows), run-heal landing without a number change.
+        private void SpawnSettleFlight(UpgradeKind kind, Vector2 from, float start)
+        {
+            int row;
+            int landDelta;
+            Sprite sprite;
+            Color fallbackTint;
+            switch (kind)
+            {
+                case UpgradeKind.Attack:
+                    row = 2; landDelta = _tuning.GainAttack; sprite = _attackIconSprite;
+                    fallbackTint = new Color(0.95f, 0.60f, 0.20f);
+                    break;
+                case UpgradeKind.Shield:
+                    row = 1; landDelta = _tuning.GainShield; sprite = _shieldIconSprite;
+                    fallbackTint = new Color(0.35f, 0.55f, 0.90f);
+                    break;
+                case UpgradeKind.RunHeal:
+                    row = 0; landDelta = 0; sprite = _healthIconSprite;
+                    fallbackTint = new Color(0.90f, 0.30f, 0.30f);
+                    break;
+                default: // MaxHealth
+                    row = 0; landDelta = _tuning.GainMaxHealth; sprite = _healthIconSprite;
+                    fallbackTint = new Color(0.90f, 0.30f, 0.30f);
+                    break;
+            }
+
+            GameObject go = new GameObject("SettleIcon");
+            go.transform.SetParent(transform, false);
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sortingOrder = 30;
+            if (sprite != null)
+            {
+                sr.sprite = sprite;
+                go.transform.localScale = Vector3.one * (0.9f / sr.bounds.size.y);
+            }
+            else
+            {
+                sr.sprite = ProceduralSprites.Unit();
+                sr.color = fallbackTint;
+                go.transform.localScale = new Vector3(0.7f, 0.7f, 1f);
+            }
+
+            go.transform.localPosition = new Vector3(from.x, from.y, 0f);
+            Vector3 centerOffset = go.transform.position - sr.bounds.center;
+            go.SetActive(false);
+
+            _flights.Add(new SettleFlight
+            {
+                Row = row,
+                LandDelta = landDelta,
+                From = from,
+                Start = start,
+                CenterOffset = centerOffset,
+                Go = go,
+            });
+        }
+
+        // Drives the settle icons: each waits for its slot, rises on an eased arc, bumps its row's shown
+        // number on arrival, and once every one has landed the next run loads after a short beat.
+        private void TickLeaveFlights()
+        {
+            if (!_leaving)
+            {
+                return;
+            }
+
+            _leaveClock += Time.deltaTime;
+
+            bool allLanded = true;
+            for (int i = 0; i < _flights.Count; i++)
+            {
+                SettleFlight f = _flights[i];
+                if (f.Landed)
+                {
+                    continue;
+                }
+
+                if (_leaveClock < f.Start)
+                {
+                    allLanded = false;
+                    continue;
+                }
+
+                float t = Mathf.Clamp01((_leaveClock - f.Start) / SettleFlightDuration);
+                if (t >= 1f)
+                {
+                    if (f.Row == 0)
+                    {
+                        _shownMaxHealth += f.LandDelta;
+                    }
+                    else if (f.Row == 1)
+                    {
+                        _shownShield += f.LandDelta;
+                    }
+                    else
+                    {
+                        _shownAttack += f.LandDelta;
+                    }
+
+                    Destroy(f.Go);
+                    f.Landed = true;
+                    _flights[i] = f;
+                    continue;
+                }
+
+                allLanded = false;
+                if (!f.Go.activeSelf)
+                {
+                    f.Go.SetActive(true);
+                }
+
+                float ease = t * t * (3f - 2f * t);
+                Vector2 pos = Vector2.Lerp(f.From, _statRowIconPos[f.Row], ease);
+                pos.y += 1.2f * 4f * t * (1f - t); // a little lift so the path reads as a toss
+                f.Go.transform.position = new Vector3(pos.x, pos.y, 0f) + f.CenterOffset;
+                _flights[i] = f;
+            }
+
+            if (allLanded)
+            {
+                _leaveLoadTimer += Time.deltaTime;
+                if (_leaveLoadTimer >= SettleLoadBeat)
+                {
+                    _leaving = false; // one shot: the load below tears the scene down
+                    GameFlow.LoadBattle();
+                }
+            }
         }
 
         // Fills every slot afresh, bought-out ones included (design doc 5.3). The draw is view-level
@@ -431,11 +664,7 @@ namespace Puckmite.View
             _shopStonesTotal++;
             _shopStonesLeft++;
             _handReady[0].Add(id);
-
-            if (_shopThrowing && !_ghostActive)
-            {
-                SetupGhost(0);
-            }
+            // Mid-throw, the new stone steps up via Update's at-rest gate like any other.
         }
 
         // Places the carried cell on the board cell under the cursor. Stacking the same kind raises that
@@ -489,9 +718,8 @@ namespace Puckmite.View
             _hasPendingCell = false;
 
             // Not a turn start: that is the battle sequence, damage-cell settlement and all, and the upgrade
-            // board has no damage cells. Only the ghost needs to come up.
+            // board has no damage cells. The first stone steps up via Update's at-rest gate.
             ClearGhost();
-            SetupGhost(0);
         }
 
         // --- Shop view ----------------------------------------------------------------------------
@@ -659,6 +887,104 @@ namespace Puckmite.View
         // The peddler art (Peddler.aseprite prefab): the battle characters' pixel scale, feet on the
         // grass line, aligned by bounds since the import pivot sits below the feet. Returns null when
         // the art is missing or broken, and the caller falls back to the circle.
+        // The player standing top-centre (사용자 지정 2026-08-10), battle's hero treatment: scaled to the
+        // battle height, feet on the shared line, idle at half speed. Missing art skips the body but the
+        // stat rows still build — they are the settlement flight's target.
+        private void BuildShopHero()
+        {
+            if (_heroBodyPrefab != null)
+            {
+                GameObject go = Instantiate(_heroBodyPrefab, transform, false);
+                go.name = "Hero";
+                SpriteRenderer sr = go.GetComponentInChildren<SpriteRenderer>();
+                if (sr == null || sr.sprite == null)
+                {
+                    Debug.LogError("[PuckHero] Hero prefab has no usable SpriteRenderer — the shop shows stat rows only.");
+                    Destroy(go);
+                }
+                else
+                {
+                    sr.sortingOrder = 10;
+                    sr.color = Color.white;
+                    if (go.TryGetComponent(out Animator animator))
+                    {
+                        animator.speed = 0.5f; // the battle idle's pace
+                    }
+
+                    go.transform.localPosition = new Vector3(HeroX, CharFeetY, 0f);
+                    go.transform.localScale *= HeroBodyHeight / sr.bounds.size.y;
+                    Vector3 target = transform.TransformPoint(new Vector3(HeroX, CharFeetY + HeroBodyHeight * 0.5f, 0f));
+                    go.transform.position += target - sr.bounds.center;
+                }
+            }
+
+            BuildHeroStatRows();
+        }
+
+        // Battle's stat column, mirrored for the lone player: [icon] [number] per row, icons fitted by
+        // bounds (import pivots sit below the art), placeholder squares where the sheet is unwired.
+        private void BuildHeroStatRows()
+        {
+            Sprite[] icons = { _healthIconSprite, _shieldIconSprite, _attackIconSprite, _stoneIconSprite };
+            Color[] placeholderTints =
+            {
+                new Color(0.90f, 0.30f, 0.30f),
+                new Color(0.35f, 0.55f, 0.90f),
+                new Color(0.95f, 0.60f, 0.20f),
+                new Color(0.75f, 0.75f, 0.75f),
+            };
+
+            _statRowTexts = new TextMeshPro[StatRowCount];
+            _statRowIconPos = new Vector2[StatRowCount];
+            for (int row = 0; row < StatRowCount; row++)
+            {
+                float y = StatBlockBottom + (StatRowCount - row - 0.5f) * StatRowHeight;
+                Vector2 iconPos = new Vector2(HeroX - 1.4f, y);
+                _statRowIconPos[row] = iconPos;
+
+                GameObject iconGo = new GameObject($"HeroStatIcon{row}");
+                iconGo.transform.SetParent(transform, false);
+                iconGo.transform.localPosition = new Vector3(iconPos.x, iconPos.y, 0f);
+                SpriteRenderer icon = iconGo.AddComponent<SpriteRenderer>();
+                icon.sortingOrder = 12;
+                if (icons[row] != null)
+                {
+                    icon.sprite = icons[row];
+                    iconGo.transform.localScale = Vector3.one * (0.9f / icon.bounds.size.y);
+                    iconGo.transform.position += transform.TransformPoint(new Vector3(iconPos.x, iconPos.y, 0f)) - icon.bounds.center;
+                }
+                else
+                {
+                    icon.sprite = ProceduralSprites.Unit();
+                    icon.color = placeholderTints[row];
+                    iconGo.transform.localScale = new Vector3(0.8f, 0.8f, 1f);
+                }
+
+                _statRowTexts[row] = SideText(transform, $"HeroStatValue{row}", "",
+                    new Vector2(HeroX + 0.85f, y), new Vector2(3.6f, StatRowHeight), TextAlignmentOptions.MidlineLeft, 8f, 12);
+            }
+        }
+
+        // Live campaign values each frame; during the leave flight the shown numbers are frozen at their
+        // pre-settle values and tick up only as icons land.
+        private void UpdateShopHeroStats()
+        {
+            if (_statRowTexts == null)
+            {
+                return;
+            }
+
+            int maxHealth = _leaving ? _shownMaxHealth : _tuning.PlayerBaseHealth + Campaign.BonusMaxHealth;
+            int shield = _leaving ? _shownShield : _tuning.PlayerBaseShield + Campaign.BonusShield;
+            int attack = _leaving ? _shownAttack : _tuning.PlayerBaseAttack + Campaign.BonusAttack;
+            int current = Campaign.NextRunHealth == 0 ? maxHealth : Mathf.Min(Campaign.NextRunHealth, maxHealth);
+
+            _statRowTexts[0].text = current + "/" + maxHealth;
+            _statRowTexts[1].text = "x " + shield;
+            _statRowTexts[2].text = "x " + attack;
+            _statRowTexts[3].text = "x " + (_tuning.PlayerStoneCount + Campaign.ExtraBattleStones);
+        }
+
         private SpriteRenderer TryBuildMerchantBody()
         {
             if (_merchantBodyPrefab == null)
@@ -914,6 +1240,15 @@ namespace Puckmite.View
 
             _stoneCountText.text = "x " + _shopStonesLeft;
 
+            // The leave flight freezes the column: no hovers, no clicks, no second settlement.
+            if (_leaving)
+            {
+                _rollOutline.enabled = false;
+                _buyOutline.enabled = false;
+                _leaveOutline.enabled = false;
+                return;
+            }
+
             bool canRoll = !_shopThrowing;
             bool canBuy = Campaign.Gold >= StonePrice && _shopStonesTotal < _stoneCapacity;
             // Settlement reads where the stones ARE, so leaving mid-flight would freeze them wherever
@@ -1029,10 +1364,7 @@ namespace Puckmite.View
             _hasRolledThisTurn = false;
             _currentActor = 0;
             ClearGhost();
-            if (_shopThrowing)
-            {
-                SetupGhost(0);
-            }
+            // Mid-throw rebuilds (physics sliders) re-stage via Update's at-rest gate.
         }
 
         // Dresses each board cell for what has been bought onto it — sheet frames when the art is wired
@@ -1129,9 +1461,9 @@ namespace Puckmite.View
             _launchReady = false;
 
             Mouse mouse = Mouse.current;
-            if (mouse == null || _merchantOpen || _confirmReplaceOpen)
+            if (mouse == null || _merchantOpen || _confirmReplaceOpen || _leaving)
             {
-                return; // both screens are modal: the board must not take clicks through them
+                return; // the modals block clicks through them; the leave flight locks the board entirely
             }
 
             Vector2 screen = mouse.position.ReadValue();
@@ -1217,10 +1549,8 @@ namespace Puckmite.View
                         LaunchGhost(drag.normalized * (_tuning.MaxPower * DragToPowerFraction(drag.magnitude)));
                         _shopStonesLeft = Mathf.Max(0, _shopStonesLeft - 1);
                         ResetAccumulator();
-                        if (_handReady[0].Count > 0)
-                        {
-                            SetupGhost(0); // the next stone steps up to the edge
-                        }
+                        // The next stone steps up in Update, once the board is at rest (사용자 지정
+                        // 2026-08-10) — no more rolling over a still-moving shot.
                     }
                 }
 

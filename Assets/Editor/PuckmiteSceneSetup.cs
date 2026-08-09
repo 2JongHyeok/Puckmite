@@ -207,19 +207,25 @@ namespace Puckmite.EditorTools
                 SetOptionalSprite(controller, "_goldPanelSprite", "Assets/Art/Sprites/UI/Gold_pannel");
 
                 // The right-of-board column (사용자 지정 2026-08-09): the remaining-stones panel and the
-                // roll / buy-stone / leave buttons, plus the stat sheet's stone pebble for the count.
+                // roll / buy-stone / leave buttons.
                 SetOptionalSprite(controller, "_stonePanelSprite", "Assets/Art/Sprites/UI/panel_stone_count_1");
                 SetOptionalSprite(controller, "_rollButtonSprite", "Assets/Art/Sprites/UI/btn_shop_roll");
                 SetOptionalSprite(controller, "_buyStoneButtonSprite", "Assets/Art/Sprites/UI/btn_shop_buy_stone");
                 SetOptionalSprite(controller, "_leaveButtonSprite", "Assets/Art/Sprites/UI/btn_shop_leave");
-                foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(StatIconSheetPath))
+
+                // The player standing top-centre with battle-style stat rows (사용자 지정 2026-08-10):
+                // the hero art and all four stat icons (the pebble also feeds the side panel's count).
+                GameObject shopHeroArt = AssetDatabase.LoadAssetAtPath<GameObject>(HeroArtPath);
+                if (shopHeroArt == null)
                 {
-                    if (asset is Sprite stoneIcon && stoneIcon.name == "Frame_3")
-                    {
-                        SetReference(controller, "_stoneIconSprite", stoneIcon);
-                        break;
-                    }
+                    Debug.LogWarning($"[PuckHero] {HeroArtPath} not found — the shop shows stat rows without the hero.");
                 }
+                else
+                {
+                    SetReference(controller, "_heroBodyPrefab", shopHeroArt);
+                }
+
+                WireStatIcons(controller);
             }
 
             EditorSceneManager.SaveScene(scene, path);

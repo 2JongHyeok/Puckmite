@@ -279,6 +279,10 @@ MonoBehaviour:
   _buyStoneButtonSprite: {fileID: -5420259035596241256, guid: ec1c92118cc60944eb60a6ec474288ed, type: 3}
   _leaveButtonSprite: {fileID: -1792790165829644407, guid: 316280ae46c3aa049b5ebdae40db6b8d, type: 3}
   _stoneIconSprite: {fileID: -3485401350434060962, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _heroBodyPrefab: {fileID: -2253911629886400664, guid: fe97968a478c1fa468ebb5156fd35b10, type: 3}
+  _healthIconSprite: {fileID: 7172269534363851296, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _shieldIconSprite: {fileID: -6791987299007039944, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _attackIconSprite: {fileID: 3994866376848337748, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
 --- !u!4 &1264881507
 Transform:
   m_ObjectHideFlags: 0
