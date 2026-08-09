@@ -160,6 +160,17 @@ namespace Puckmite.EditorTools
                 WireEnemyPrefab(controller, "_boss1Prefab", "boss1"); // stage bosses (사용자 아트 2026-08-10)
                 WireEnemyPrefab(controller, "_boss2Prefab", "boss2");
 
+                // The boss debuff's corrupted-cell overlay (사용자 아트 2026-08-10).
+                GameObject debuffArt = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Art/Sprites/UI/cell_debuff.aseprite");
+                if (debuffArt != null)
+                {
+                    SetReference(controller, "_cellDebuffPrefab", debuffArt);
+                }
+                else
+                {
+                    Debug.LogWarning("[PuckHero] Assets/Art/Sprites/UI/cell_debuff.aseprite not found — corrupted cells keep the tint fallback.");
+                }
+
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
                 SetOptionalSprite(controller, "_victoryPanelSprite", "Assets/Art/Sprites/UI/VictoryPanel");

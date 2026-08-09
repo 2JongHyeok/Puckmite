@@ -171,8 +171,15 @@ namespace Puckmite.View
             DamageAll,
         }
 
-        private readonly List<int> _debuffCells = new List<int>(); // corrupted inner-cell indices, this round
-        private SpriteRenderer[] _buffCellViews; // the inner 3x3 quads, recoloured while corrupted
+        // Corrupted inner-cell indices with, in lock-step, the boss turns each has left. A cell lasts
+        // DebuffCellTurns boss turns (사용자 지정 2026-08-10: 2턴 — the player feels it twice), so two
+        // casts' cells can sit on the board together; re-corrupting a cell restarts its clock.
+        private const int DebuffCellTurns = 2;
+        private readonly List<int> _debuffCells = new List<int>();
+        private readonly List<int> _debuffCellTurns = new List<int>();
+        [SerializeField] private GameObject _cellDebuffPrefab; // UI/cell_debuff.aseprite — corrupted-cell overlay (3-frame loop)
+        private GameObject[] _debuffCellFx;      // per inner cell, the overlay instance shown while corrupted
+        private SpriteRenderer[] _buffCellViews; // the inner 3x3 quads, recoloured while corrupted (art-less fallback)
         private SpriteRenderer _holeView;        // dark quad over the hole cell while one is open
         private static readonly Color CorruptCellColor = new Color(0.36f, 0.10f, 0.16f);
         // Multiply tint for corrupted art cells: red-shift that keeps the face readable (the flat
@@ -573,13 +580,13 @@ namespace Puckmite.View
                     ClearActorBuff(_currentActor); // turn start: back to base only (design doc 3.6)
                     SettleCurrentActor();          // stones lost here go back to the hand as pending
 
-                    // A boss turn (run 5 of either stage): last round's board warp expires now ("until
-                    // its next turn") and a fresh ability is cast — then it rolls like any enemy
-                    // (사용자 지정 2026-08-10). With nothing left to roll it takes the no-stone beat below
-                    // like everyone else.
+                    // A boss turn (run 5 of either stage): the hole closes, corrupted cells age out
+                    // after their two boss turns, and a fresh ability is cast — then it rolls like any
+                    // enemy (사용자 지정 2026-08-10). With nothing left to roll it takes the no-stone
+                    // beat below like everyone else.
                     if (_currentActor != 0 && Campaign.IsBossRun)
                     {
-                        ClearBossEffects();
+                        ExpireBossEffects();
                         CastBossAbility();
                     }
 
@@ -891,9 +898,20 @@ namespace Puckmite.View
 
         // --- Boss abilities -------------------------------------------------------------------------
 
-        private void ClearBossEffects()
+        // Boss turn start: the hole lasts one round as before; each corrupted cell ages out after
+        // DebuffCellTurns boss turns instead (사용자 지정 2026-08-10).
+        private void ExpireBossEffects()
         {
-            _debuffCells.Clear();
+            for (int i = _debuffCells.Count - 1; i >= 0; i--)
+            {
+                _debuffCellTurns[i]--;
+                if (_debuffCellTurns[i] <= 0)
+                {
+                    _debuffCellTurns.RemoveAt(i);
+                    _debuffCells.RemoveAt(i);
+                }
+            }
+
             _sim.ClearHole();
         }
 
@@ -914,9 +932,9 @@ namespace Puckmite.View
             }
         }
 
-        // 1~2 inner buff cells flip for one round: an attack cell now drains attack, a shield cell now
-        // costs health — the sign flip itself happens in CaptureActorBuff. A duplicate pick simply
-        // collapses to one cell, which still lands inside the designed 1~2 range.
+        // 1~2 inner buff cells flip for DebuffCellTurns boss turns: an attack cell now drains attack, a
+        // shield cell now costs health — the sign flip itself happens in CaptureActorBuff. A duplicate
+        // pick simply collapses to one cell (its clock restarting), still inside the designed 1~2 range.
         private void CastCorruptCells()
         {
             int picks = Random.Range(1, 3); // 1 or 2
@@ -925,9 +943,15 @@ namespace Puckmite.View
                 int col = Random.Range(1, 4);
                 int row = Random.Range(1, 4);
                 int index = col + row * BoardCells.Size;
-                if (!_debuffCells.Contains(index))
+                int existing = _debuffCells.IndexOf(index);
+                if (existing >= 0)
+                {
+                    _debuffCellTurns[existing] = DebuffCellTurns;
+                }
+                else
                 {
                     _debuffCells.Add(index);
+                    _debuffCellTurns.Add(DebuffCellTurns);
                 }
             }
 
@@ -1555,6 +1579,22 @@ namespace Puckmite.View
                 }
             }
 
+            // The corruption overlay (UI/cell_debuff — 사용자 아트 2026-08-10): one animated instance per
+            // inner cell, enabled while that cell is corrupted. Above the faces (1), below the occupancy
+            // highlights (4). Without the art the cells fall back to the recolour treatment.
+            if (_cellDebuffPrefab != null)
+            {
+                _debuffCellFx = new GameObject[9];
+                for (int row = 1; row <= 3; row++)
+                {
+                    for (int col = 1; col <= 3; col++)
+                    {
+                        Vector2 center = BoardCells.CellCenter(boardMin, boardMax, col, row);
+                        _debuffCellFx[(row - 1) * 3 + (col - 1)] = BuildDebuffFx(board, center, buffCellSize);
+                    }
+                }
+            }
+
             // The boss's hole, moved onto whichever cell is open. Above the occupancy highlights (4) so the
             // pit visibly swallows, below the rings (7+) and stones (10).
             _holeView = MakeQuad("Hole", board, Vector2.zero, buffCellSize, new Color(0.02f, 0.02f, 0.04f), 5);
@@ -1580,6 +1620,31 @@ namespace Puckmite.View
             MakeQuad("WallBottom", board, new Vector2(0f, -BoardHalf), new Vector2(full + wallThickness, wallThickness), wallColor, 3);
             MakeQuad("WallLeft", board, new Vector2(-BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
             MakeQuad("WallRight", board, new Vector2(BoardHalf, 0f), new Vector2(wallThickness, full + wallThickness), wallColor, 3);
+        }
+
+        // One corruption overlay, fitted onto its cell (the import pivot sits below the art — the house
+        // pattern — so the sprite bounds are aligned instead). Starts hidden; UpdateBossEffectVisuals
+        // toggles it. Returns null on a broken prefab and the cell keeps the recolour fallback.
+        private GameObject BuildDebuffFx(Transform board, Vector2 center, Vector2 size)
+        {
+            GameObject go = Instantiate(_cellDebuffPrefab, board, false);
+            go.name = "DebuffFx";
+            SpriteRenderer sr = go.GetComponentInChildren<SpriteRenderer>();
+            if (sr == null || sr.sprite == null)
+            {
+                Debug.LogError("[PuckHero] cell_debuff prefab has no usable SpriteRenderer — corrupted cells keep the tint fallback.");
+                Destroy(go);
+                return null;
+            }
+
+            sr.sortingOrder = 2;
+            Bounds b = sr.bounds;
+            go.transform.localScale = Vector3.Scale(go.transform.localScale,
+                new Vector3(size.x / b.size.x, size.y / b.size.y, 1f));
+            Vector3 target = board.TransformPoint(new Vector3(center.x, center.y, 0f));
+            go.transform.position += target - sr.bounds.center;
+            go.SetActive(false);
+            return go;
         }
 
         // The sheet frame a buff cell wears: sword for attack, shield for shield, sparkles on the
@@ -1975,7 +2040,8 @@ namespace Puckmite.View
         }
 
         // Corrupted cells wear their warning tint, and the hole quad sits on whichever cell is open.
-        // Recoloured per frame so expiry (boss's next turn) restores the board with no bookkeeping.
+        // Driven per frame so expiry (ExpireBossEffects) restores the board with no bookkeeping. The
+        // corruption signal is the animated overlay when its art is wired; the recolour is the fallback.
         private void UpdateBossEffectVisuals()
         {
             if (_buffCellViews == null)
@@ -1988,9 +2054,23 @@ namespace Puckmite.View
                 for (int col = 1; col <= 3; col++)
                 {
                     bool corrupted = _debuffCells.Contains(col + row * BoardCells.Size);
-                    _buffCellViews[(row - 1) * 3 + (col - 1)].color = _boardUsesArt
-                        ? (corrupted ? CorruptCellTint : Color.white)
-                        : (corrupted ? CorruptCellColor : BuffCellColor(col, row));
+                    int slot = (row - 1) * 3 + (col - 1);
+                    GameObject fx = _debuffCellFx != null ? _debuffCellFx[slot] : null;
+                    if (fx != null)
+                    {
+                        if (fx.activeSelf != corrupted)
+                        {
+                            fx.SetActive(corrupted);
+                        }
+
+                        _buffCellViews[slot].color = _boardUsesArt ? Color.white : BuffCellColor(col, row);
+                    }
+                    else
+                    {
+                        _buffCellViews[slot].color = _boardUsesArt
+                            ? (corrupted ? CorruptCellTint : Color.white)
+                            : (corrupted ? CorruptCellColor : BuffCellColor(col, row));
+                    }
                 }
             }
 
