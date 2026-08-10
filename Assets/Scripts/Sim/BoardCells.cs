@@ -11,12 +11,13 @@ namespace Puckmite.Sim
         Damage,
     }
 
-    /// <summary>Which stat an inner buff cell feeds (design doc 3.1); the per-run assignment lives in
-    /// <see cref="BoardLayout"/>.</summary>
+    /// <summary>Which stat an inner buff cell feeds (design doc 3.1; Heal added 사용자 지정
+    /// 2026-08-10); the per-run assignment lives in <see cref="BoardLayout"/>.</summary>
     public enum BuffKind
     {
         Attack,
         Shield,
+        Heal,
     }
 
     /// <summary>
@@ -88,14 +89,15 @@ namespace Puckmite.Sim
 
         /// <summary>
         /// Sums the buff a single puck receives from the cells it occupies under the given layout
-        /// (design doc 3.2: every occupied cell applies in full). Attack and shield totals are returned
-        /// separately.
+        /// (design doc 3.2: every occupied cell applies in full). Attack, shield and heal totals are
+        /// returned separately.
         /// </summary>
-        public static void SumBuffs(BoardLayout layout, Vector2 boardMin, Vector2 boardMax, Vector2 puckPosition, float puckRadius, float threshold, out int attack, out int shield)
+        public static void SumBuffs(BoardLayout layout, Vector2 boardMin, Vector2 boardMax, Vector2 puckPosition, float puckRadius, float threshold, out int attack, out int shield, out int heal)
         {
             GetOccupiedCells(boardMin, boardMax, puckPosition, puckRadius, threshold, _buffScratch);
             attack = 0;
             shield = 0;
+            heal = 0;
             for (int i = 0; i < _buffScratch.Count; i++)
             {
                 int cell = _buffScratch[i];
@@ -107,13 +109,11 @@ namespace Puckmite.Sim
                     continue;
                 }
 
-                if (layout.KindOf(col, row) == BuffKind.Attack)
+                switch (layout.KindOf(col, row))
                 {
-                    attack += value;
-                }
-                else
-                {
-                    shield += value;
+                    case BuffKind.Attack: attack += value; break;
+                    case BuffKind.Shield: shield += value; break;
+                    default: heal += value; break;
                 }
             }
         }

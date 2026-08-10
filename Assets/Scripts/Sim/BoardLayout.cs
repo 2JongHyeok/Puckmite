@@ -16,10 +16,16 @@ namespace Puckmite.Sim
         private readonly BuffKind[] _kinds = new BuffKind[BoardCells.Size * BoardCells.Size];
         private readonly int[] _levels = new int[BoardCells.Size * BoardCells.Size];
 
-        public const int MinBuffCells = 7; // 사용자 지정: 내부 9칸 중 7칸 이상은 버프칸
-        public const int MaxBuffCells = 9;
-        public const int MinPerKind = 2;   // 사용자 지정: 공격칸·쉴드칸 각각 2칸 이상
-        public const int CentreLevel = 2;  // 사용자 지정: 정 가운데 칸은 항상 lv2
+        // 사용자 지정 2026-08-10: per-kind counts, each rolled independently — attack 3~4, shield 3~4,
+        // heal 0~1 (6~9 buffs in total, 0~3 inner cells left empty).
+        public const int MinAttackCells = 3;
+        public const int MaxAttackCells = 4;
+        public const int MinShieldCells = 3;
+        public const int MaxShieldCells = 4;
+        public const int MinHealCells = 0;
+        public const int MaxHealCells = 1;
+        public const double HealCellChance = 0.3; // 사용자 지정 2026-08-10: 회복칸은 30% 확률로 1칸
+        public const int CentreLevel = 2; // 사용자 지정: 정 가운데 칸은 항상 lv2
 
         private BoardLayout()
         {
@@ -64,9 +70,10 @@ namespace Puckmite.Sim
         }
 
         /// <summary>
-        /// Rolls a run's board (사용자 지정 2026-08-10): the centre is always a lv2 buff of random kind,
-        /// 7~9 of the inner 9 are buffs in total (the rest empty), every non-centre buff is lv1, and each
-        /// kind fields at least two cells. Pure given the rng — the same seed rebuilds the same board.
+        /// Rolls a run's board (사용자 지정 2026-08-10): attack 3~4 and shield 3~4 cells rolled
+        /// independently, plus one heal cell at 30% odds, the rest of the inner 9 empty. The centre is
+        /// always a lv2 buff of whichever kind lands there; every other buff is lv1. Pure given the
+        /// rng — the same seed rebuilds the same board.
         /// </summary>
         public static BoardLayout Roll(Random rng)
         {
@@ -88,16 +95,19 @@ namespace Puckmite.Sim
 
             Shuffle(cells, rng);
 
-            int count = rng.Next(MinBuffCells, MaxBuffCells + 1);
+            int attackCount = rng.Next(MinAttackCells, MaxAttackCells + 1);
+            int shieldCount = rng.Next(MinShieldCells, MaxShieldCells + 1);
+            int healCount = rng.NextDouble() < HealCellChance ? MaxHealCells : MinHealCells; // 30%: one heal cell
+            int count = attackCount + shieldCount + healCount; // 6..9, never past the inner 9
 
-            // A bag of kinds guaranteeing the per-kind minimum, the rest random, then shuffled so the
-            // guaranteed ones land anywhere (the centre included).
+            // The bag of kinds at their rolled counts, shuffled so any kind can land anywhere — the
+            // centre included.
             BuffKind[] kinds = new BuffKind[count];
             for (int i = 0; i < count; i++)
             {
-                kinds[i] = i < MinPerKind ? BuffKind.Attack
-                    : i < MinPerKind * 2 ? BuffKind.Shield
-                    : rng.Next(2) == 0 ? BuffKind.Attack : BuffKind.Shield;
+                kinds[i] = i < attackCount ? BuffKind.Attack
+                    : i < attackCount + shieldCount ? BuffKind.Shield
+                    : BuffKind.Heal;
             }
 
             Shuffle(kinds, rng);

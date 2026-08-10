@@ -10,6 +10,7 @@ namespace Puckmite.Sim
     {
         public float BuffAttack;
         public float BuffShield;
+        public float BuffHeal;        // set per plan by the view: 0 at full health, above shield otherwise (사용자 지정 2026-08-10)
         public float DamageDealt;     // health removed from opposing stones
         public float StoneDestroyed;  // bonus per opposing stone destroyed
         public float OwnDamage;       // health lost by own stones (subtracted)
@@ -507,9 +508,10 @@ namespace Puckmite.Sim
                     continue;
                 }
 
-                BoardCells.SumBuffs(clone.Layout, clone.BoardMin, clone.BoardMax, p.Position, p.Radius, occupancyThreshold, out int attack, out int shield);
+                BoardCells.SumBuffs(clone.Layout, clone.BoardMin, clone.BoardMax, p.Position, p.Radius, occupancyThreshold, out int attack, out int shield, out int heal);
                 score += weights.BuffAttack * attack * p.Level;
                 score += weights.BuffShield * shield * p.Level;
+                score += weights.BuffHeal * heal * p.Level;
 
                 BoardCells.GetOccupiedCells(clone.BoardMin, clone.BoardMax, p.Position, p.Radius, occupancyThreshold, _cells);
                 for (int c = 0; c < _cells.Count; c++)

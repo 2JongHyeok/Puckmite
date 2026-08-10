@@ -684,19 +684,20 @@ namespace Puckmite.Sim
             const float thr = 0.3f;
 
             BoardLayout classic = BoardLayout.Classic;
-            BoardCells.SumBuffs(classic, min, max, new Vector2(0f, 0f), r, thr, out int a0, out int s0);   // centre: attack 2
-            BoardCells.SumBuffs(classic, min, max, new Vector2(0f, -5f), r, thr, out int a1, out int s1);  // shield cell (2,1)
-            BoardCells.SumBuffs(classic, min, max, new Vector2(2.5f, -2.5f), r, thr, out int a2, out int s2); // cross-point: atk3 shield2
-            BoardCells.SumBuffs(classic, min, max, new Vector2(-9f, 0f), r, thr, out int a3, out int s3);  // damage cell: none
+            BoardCells.SumBuffs(classic, min, max, new Vector2(0f, 0f), r, thr, out int a0, out int s0, out int h0);   // centre: attack 2
+            BoardCells.SumBuffs(classic, min, max, new Vector2(0f, -5f), r, thr, out int a1, out int s1, out int h1);  // shield cell (2,1)
+            BoardCells.SumBuffs(classic, min, max, new Vector2(2.5f, -2.5f), r, thr, out int a2, out int s2, out int h2); // cross-point: atk3 shield2
+            BoardCells.SumBuffs(classic, min, max, new Vector2(-9f, 0f), r, thr, out int a3, out int s3, out int h3);  // damage cell: none
 
             bool centre = a0 == 2 && s0 == 0;
             bool shieldCell = a1 == 0 && s1 == 1;
             bool crossPoint = a2 == 3 && s2 == 2;
             bool damageCell = a3 == 0 && s3 == 0;
+            bool noHeal = h0 == 0 && h1 == 0 && h2 == 0 && h3 == 0; // the classic board fields no heal cells
 
-            bool passed = centre && shieldCell && crossPoint && damageCell;
+            bool passed = centre && shieldCell && crossPoint && damageCell && noHeal;
             string detail =
-                $"centre a{a0}s{s0}(exp2,0), shield a{a1}s{s1}(exp0,1), cross a{a2}s{s2}(exp3,2), damage a{a3}s{s3}(exp0,0).";
+                $"centre a{a0}s{s0}(exp2,0), shield a{a1}s{s1}(exp0,1), cross a{a2}s{s2}(exp3,2), damage a{a3}s{s3}(exp0,0), noHeal={noHeal}.";
             return new CheckResult("Buff sum", passed, detail);
         }
 
@@ -903,19 +904,21 @@ namespace Puckmite.Sim
             return new CheckResult("Hole cleared", passed, detail);
         }
 
-        /// <summary>The per-run roll (사용자 지정 2026-08-10): sweeping seeds, every board has 7~9 inner
-        /// buffs, at least 2 of each kind, the centre always a lv2 buff, other buffs lv1, the outer ring
-        /// clean — and the same seed rolls the same board twice.</summary>
+        /// <summary>The per-run roll (사용자 지정 2026-08-10): sweeping seeds, every board fields attack
+        /// 3~4 and shield 3~4 cells plus at most one heal cell (30% odds — the sweep's rate must sit
+        /// near it), the centre always a lv2 buff, other buffs lv1, the outer ring clean — and the same
+        /// seed rolls the same board twice.</summary>
         public static CheckResult LayoutRollCheck()
         {
+            int healBoards = 0;
             for (int seed = 0; seed < 200; seed++)
             {
                 BoardLayout layout = BoardLayout.Roll(new System.Random(seed));
                 BoardLayout again = BoardLayout.Roll(new System.Random(seed));
 
-                int buffs = 0;
                 int attack = 0;
                 int shield = 0;
+                int heal = 0;
                 for (int row = 0; row < BoardCells.Size; row++)
                 {
                     for (int col = 0; col < BoardCells.Size; col++)
@@ -938,14 +941,11 @@ namespace Puckmite.Sim
                             return new CheckResult("Layout roll", false, $"seed {seed}: outer cell ({col},{row}) is a buff.");
                         }
 
-                        buffs++;
-                        if (layout.KindOf(col, row) == BuffKind.Attack)
+                        switch (layout.KindOf(col, row))
                         {
-                            attack++;
-                        }
-                        else
-                        {
-                            shield++;
+                            case BuffKind.Attack: attack++; break;
+                            case BuffKind.Shield: shield++; break;
+                            default: heal++; break;
                         }
 
                         int expected = col == 2 && row == 2 ? BoardLayout.CentreLevel : 1;
@@ -956,15 +956,24 @@ namespace Puckmite.Sim
                     }
                 }
 
-                if (buffs < BoardLayout.MinBuffCells || buffs > BoardLayout.MaxBuffCells
-                    || attack < BoardLayout.MinPerKind || shield < BoardLayout.MinPerKind
+                if (attack < BoardLayout.MinAttackCells || attack > BoardLayout.MaxAttackCells
+                    || shield < BoardLayout.MinShieldCells || shield > BoardLayout.MaxShieldCells
+                    || heal < BoardLayout.MinHealCells || heal > BoardLayout.MaxHealCells
                     || !layout.IsBuff(2, 2))
                 {
-                    return new CheckResult("Layout roll", false, $"seed {seed}: buffs={buffs} (atk {attack}/shd {shield}), centre buff={layout.IsBuff(2, 2)}.");
+                    return new CheckResult("Layout roll", false, $"seed {seed}: atk {attack}/shd {shield}/heal {heal}, centre buff={layout.IsBuff(2, 2)}.");
                 }
+
+                healBoards += heal;
             }
 
-            return new CheckResult("Layout roll", true, "200 seeds: 7~9 buffs, 2+ per kind, centre lv2, others lv1, outer clean, deterministic.");
+            // 30% odds over 200 fixed seeds: allow a generous band so only a miswired chance fails.
+            if (healBoards < 40 || healBoards > 80)
+            {
+                return new CheckResult("Layout roll", false, $"heal boards {healBoards}/200 — expected near 30%.");
+            }
+
+            return new CheckResult("Layout roll", true, $"200 seeds: attack 3~4, shield 3~4, heal 30% ({healBoards}/200), centre lv2, others lv1, outer clean, deterministic.");
         }
 
         /// <summary>A clone carries the sim's layout, so previews and AI roll-outs sum buffs off the same
@@ -978,13 +987,13 @@ namespace Puckmite.Sim
             PuckSim clone = sim.Clone();
 
             bool carried = ReferenceEquals(clone.Layout, rolled);
-            BoardCells.SumBuffs(sim.Layout, sim.BoardMin, sim.BoardMax, new Vector2(0f, 0f), 1.5f, 0.3f, out int a0, out int s0);
-            BoardCells.SumBuffs(clone.Layout, clone.BoardMin, clone.BoardMax, new Vector2(0f, 0f), 1.5f, 0.3f, out int a1, out int s1);
-            bool sameSum = a0 == a1 && s0 == s1;
-            bool centreCounts = a0 + s0 >= BoardLayout.CentreLevel; // the centre is always a lv2 buff
+            BoardCells.SumBuffs(sim.Layout, sim.BoardMin, sim.BoardMax, new Vector2(0f, 0f), 1.5f, 0.3f, out int a0, out int s0, out int h0);
+            BoardCells.SumBuffs(clone.Layout, clone.BoardMin, clone.BoardMax, new Vector2(0f, 0f), 1.5f, 0.3f, out int a1, out int s1, out int h1);
+            bool sameSum = a0 == a1 && s0 == s1 && h0 == h1;
+            bool centreCounts = a0 + s0 + h0 >= BoardLayout.CentreLevel; // the centre is always a lv2 buff
 
             bool passed = carried && sameSum && centreCounts;
-            string detail = $"carried={carried}, sums a{a0}s{s0} vs a{a1}s{s1}, centre counts={centreCounts}.";
+            string detail = $"carried={carried}, sums a{a0}s{s0}h{h0} vs a{a1}s{s1}h{h1}, centre counts={centreCounts}.";
             return new CheckResult("Layout clone", passed, detail);
         }
 

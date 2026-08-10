@@ -146,6 +146,7 @@ namespace Puckmite.View
         private const float BuffFlightLead = 0.15f;
         private int[] _pendingShownAttack;
         private int[] _pendingShownShield;
+        private int[] _pendingShownHeal; // the applied heal not yet shown — green hearts pay it off
         private Vector2[][] _statRowIconWorld;      // [actor][row] icon centres, the flight targets
 
         // 발사 스킵 (사용자 지정 2026-08-10): the pre-roll enemy click is gone — skipping the roll is
@@ -1224,6 +1225,11 @@ namespace Puckmite.View
             {
                 BuffAttack = _tuning.AiBuffAttackWeight,
                 BuffShield = _tuning.AiBuffShieldWeight,
+                // 회복칸 가치 (사용자 지정 2026-08-10): at full health it is worth nothing — shield
+                // cells win; wounded, it outranks the shield weight so heal cells come first.
+                BuffHeal = _actorHealth[_currentActor] >= BaseHealth(_currentActor)
+                    ? 0f
+                    : _tuning.AiBuffShieldWeight * 1.5f,
                 DamageDealt = _tuning.AiDamageWeight,
                 StoneDestroyed = _tuning.AiDestroyBonus,
                 OwnDamage = _tuning.AiOwnDamageWeight,
@@ -1619,8 +1625,8 @@ namespace Puckmite.View
         // Turn end (design doc 3.5 step 3): lock in the actor's buff from the cells its stones occupy, each
         // cell's value multiplied by that stone's level (design doc 3.7 growth). Held until its next turn.
         // Per-cell rather than BoardCells.SumBuffs, because boss-corrupted cells count the other way: an
-        // attack cell drains the attack snapshot (it may go negative), and a shield cell costs the
-        // character health right here instead of granting shield.
+        // attack cell drains the attack snapshot (it may go negative), and a shield or heal cell costs the
+        // character health right here instead of granting its buff.
         private void CaptureActorBuff(int actor)
         {
             if (_actorBuffAttack == null)
@@ -1628,10 +1634,21 @@ namespace Puckmite.View
                 return;
             }
 
-            SumPendingBuff(actor, out int attack, out int shield, out int healthLoss);
+            SumPendingBuff(actor, out int attack, out int shield, out int heal, out int healthLoss);
 
             _actorBuffAttack[actor] = attack;
             _actorEffectShield[actor] = shield; // effect shield refills to the buff amount (design doc 3.6)
+
+            // 회복칸 (사용자 지정 2026-08-10): heals right at the snapshot, capped at max health. The
+            // applied amount becomes the shown-number debt the green hearts pay off as they land —
+            // overheal hearts land without a number change, the settle flight's precedent.
+            _pendingShownHeal[actor] = 0;
+            if (heal > 0)
+            {
+                int healed = Mathf.Min(heal, BaseHealth(actor) - _actorHealth[actor]);
+                _actorHealth[actor] += healed;
+                _pendingShownHeal[actor] = healed;
+            }
 
             if (healthLoss > 0)
             {
@@ -1649,11 +1666,12 @@ namespace Puckmite.View
         // One walk shared by the turn-end capture and the live stat preview (사용자 지정 2026-08-10:
         // 예상 능력치 — the two must never disagree): what the actor's stones would lock in from where
         // they sit right now. Corrupted attack cells drain (attack may go negative); corrupted shield
-        // cells cost health instead of granting shield.
-        private void SumPendingBuff(int actor, out int attack, out int shield, out int healthLoss)
+        // and heal cells cost health instead of granting their buff.
+        private void SumPendingBuff(int actor, out int attack, out int shield, out int heal, out int healthLoss)
         {
             attack = 0;
             shield = 0;
+            heal = 0;
             healthLoss = 0;
             BoardLayout layout = _sim.Layout;
             Vector2 boardMin = _sim.BoardMin;
@@ -1681,17 +1699,17 @@ namespace Puckmite.View
 
                     int gain = value * p.Level;
                     bool corrupted = CellCorruptedFor(actor, index);
-                    if (layout.KindOf(col, row) == BuffKind.Attack)
+                    switch (layout.KindOf(col, row))
                     {
-                        attack += corrupted ? -gain : gain;
-                    }
-                    else if (corrupted)
-                    {
-                        healthLoss += gain;
-                    }
-                    else
-                    {
-                        shield += gain;
+                        case BuffKind.Attack:
+                            attack += corrupted ? -gain : gain;
+                            break;
+                        case BuffKind.Shield:
+                            if (corrupted) { healthLoss += gain; } else { shield += gain; }
+                            break;
+                        default: // Heal (사용자 지정 2026-08-10)
+                            if (corrupted) { healthLoss += gain; } else { heal += gain; }
+                            break;
                     }
                 }
             }
@@ -1770,12 +1788,12 @@ namespace Puckmite.View
                         continue;
                     }
 
-                    bool isAttack = layout.KindOf(col, row) == BuffKind.Attack;
+                    BuffKind kind = layout.KindOf(col, row);
                     int points = layout.ValueOf(col, row) * p.Level;
                     Vector2 from = BoardCells.CellCenter(boardMin, boardMax, col, row);
                     for (int n = 0; n < points; n++)
                     {
-                        SpawnBuffFlightIcon(actor, isAttack, from, start);
+                        SpawnBuffFlightIcon(actor, kind, from, start);
                         start += IconFlightStagger;
                         spawned++;
                     }
@@ -1785,29 +1803,42 @@ namespace Puckmite.View
             return spawned;
         }
 
-        private void SpawnBuffFlightIcon(int actor, bool isAttack, Vector2 from, float start)
+        // Heal flights fly the green heart to the health row; its shown-number debt was set at capture
+        // (the applied, capped amount), so overheal hearts land without a number change.
+        private void SpawnBuffFlightIcon(int actor, BuffKind kind, Vector2 from, float start)
         {
-            Sprite sprite = isAttack ? _attackIconSprite : _shieldIconSprite;
-            Color fallback = isAttack ? new Color(0.95f, 0.60f, 0.20f) : new Color(0.35f, 0.55f, 0.90f);
-            Vector2 to = _statRowIconWorld[actor][isAttack ? 2 : 1];
-            if (isAttack)
+            Sprite sprite;
+            Color fallback;
+            int rowIndex;
+            switch (kind)
             {
-                _pendingShownAttack[actor]++;
-            }
-            else
-            {
-                _pendingShownShield[actor]++;
+                case BuffKind.Attack:
+                    sprite = _attackIconSprite; fallback = new Color(0.95f, 0.60f, 0.20f); rowIndex = 2;
+                    _pendingShownAttack[actor]++;
+                    break;
+                case BuffKind.Shield:
+                    sprite = _shieldIconSprite; fallback = new Color(0.35f, 0.55f, 0.90f); rowIndex = 1;
+                    _pendingShownShield[actor]++;
+                    break;
+                default: // Heal
+                    sprite = _runHealIconSprite; fallback = new Color(0.45f, 0.95f, 0.5f); rowIndex = 0;
+                    break;
             }
 
+            Vector2 to = _statRowIconWorld[actor][rowIndex];
             SpawnIconFlight(sprite, fallback, from, to, start, () =>
             {
-                if (isAttack)
+                switch (kind)
                 {
-                    _pendingShownAttack[actor] = Mathf.Max(0, _pendingShownAttack[actor] - 1);
-                }
-                else
-                {
-                    _pendingShownShield[actor] = Mathf.Max(0, _pendingShownShield[actor] - 1);
+                    case BuffKind.Attack:
+                        _pendingShownAttack[actor] = Mathf.Max(0, _pendingShownAttack[actor] - 1);
+                        break;
+                    case BuffKind.Shield:
+                        _pendingShownShield[actor] = Mathf.Max(0, _pendingShownShield[actor] - 1);
+                        break;
+                    default:
+                        _pendingShownHeal[actor] = Mathf.Max(0, _pendingShownHeal[actor] - 1);
+                        break;
                 }
             });
         }
@@ -1828,7 +1859,8 @@ namespace Puckmite.View
 
             _boardUsesArt = _cellAttackSprite != null && _cellAttackStrongSprite != null
                 && _cellShieldSprite != null && _cellShieldStrongSprite != null && _cellDamageSprite != null
-                && _cellEmptySprite != null; // the random deal leaves empty inner cells, which wear the plain frame
+                && _cellEmptySprite != null // the random deal leaves empty inner cells, which wear the plain frame
+                && _cellRunHealSprite != null; // heal cells wear the green heal face (사용자 지정 2026-08-10)
 
             // Outer damage ring: art wears the hazard frame; the flat board background already reads
             // as it otherwise.
@@ -1931,8 +1963,10 @@ namespace Puckmite.View
             return go;
         }
 
-        // The sheet frame an inner cell wears this run: sword for attack, shield for shield, sparkles on
-        // the lv2 centre, the plain frame where the deal left the cell empty.
+        // The sheet frame an inner cell wears this run: sword for attack, shield for shield, the green
+        // heal heart for heal (single face — no sparkle variant in the sheet yet, so the lv2 centre
+        // reads its level from the tooltip), sparkles on the lv2 attack/shield centre, the plain frame
+        // where the deal left the cell empty.
         private Sprite BuffCellSprite(int col, int row)
         {
             BoardLayout layout = _sim.Layout;
@@ -1942,16 +1976,16 @@ namespace Puckmite.View
             }
 
             bool strong = layout.ValueOf(col, row) >= 2;
-            if (layout.KindOf(col, row) == BuffKind.Attack)
+            switch (layout.KindOf(col, row))
             {
-                return strong ? _cellAttackStrongSprite : _cellAttackSprite;
+                case BuffKind.Attack: return strong ? _cellAttackStrongSprite : _cellAttackSprite;
+                case BuffKind.Shield: return strong ? _cellShieldStrongSprite : _cellShieldSprite;
+                default: return _cellRunHealSprite;
             }
-
-            return strong ? _cellShieldStrongSprite : _cellShieldSprite;
         }
 
-        // Placeholder inner-cell tint: attack cells warm, shield cells cool, brighter at the stronger
-        // centre, a flat dark grey on empty cells.
+        // Placeholder inner-cell tint: attack cells warm, shield cells cool, heal cells green, brighter
+        // at the stronger centre, a flat dark grey on empty cells.
         private Color BuffCellColor(int col, int row)
         {
             BoardLayout layout = _sim.Layout;
@@ -1961,12 +1995,15 @@ namespace Puckmite.View
             }
 
             bool strong = layout.ValueOf(col, row) >= 2; // the centre grants 2, other buffs 1
-            if (layout.KindOf(col, row) == BuffKind.Attack)
+            switch (layout.KindOf(col, row))
             {
-                return strong ? new Color(0.46f, 0.30f, 0.16f) : new Color(0.34f, 0.24f, 0.16f);
+                case BuffKind.Attack:
+                    return strong ? new Color(0.46f, 0.30f, 0.16f) : new Color(0.34f, 0.24f, 0.16f);
+                case BuffKind.Shield:
+                    return strong ? new Color(0.18f, 0.34f, 0.42f) : new Color(0.16f, 0.26f, 0.32f);
+                default:
+                    return strong ? new Color(0.20f, 0.42f, 0.26f) : new Color(0.16f, 0.32f, 0.22f);
             }
-
-            return strong ? new Color(0.18f, 0.34f, 0.42f) : new Color(0.16f, 0.26f, 0.32f);
         }
 
         private void BuildCellHighlights()
@@ -2042,6 +2079,7 @@ namespace Puckmite.View
             _actorTurnCounts = new int[_actorCount];
             _pendingShownAttack = new int[_actorCount];
             _pendingShownShield = new int[_actorCount];
+            _pendingShownHeal = new int[_actorCount];
             _statRowIconWorld = new Vector2[_actorCount][];
             _hitFlashUntil = new float[_actorCount];
             _deathSinkStart = new float[_actorCount];
@@ -2544,12 +2582,15 @@ namespace Puckmite.View
             // until the turn's buff is actually captured; after that it lives in the number itself.
             int previewAttack = 0;
             int previewShield = 0;
-            int previewLoss = 0;
+            int previewHealth = 0;
             bool preview = !_gameOver && _currentActor == 0 && !_actorDead[0]
                 && !_awaitingAttack && !_buffFlightActive;
             if (preview)
             {
-                SumPendingBuff(0, out previewAttack, out previewShield, out previewLoss);
+                SumPendingBuff(0, out previewAttack, out previewShield, out int previewHeal, out int previewLoss);
+                // What would actually land on the health number: the heal capped at max, minus the
+                // corrupted cells' toll.
+                previewHealth = Mathf.Min(previewHeal, BaseHealth(0) - _actorHealth[0]) - previewLoss;
             }
 
             for (int actor = 0; actor < _actorCount; actor++)
@@ -2590,9 +2631,13 @@ namespace Puckmite.View
                 string attackSuffix = "";
                 if (preview && actor == 0)
                 {
-                    if (previewLoss > 0)
+                    if (previewHealth > 0)
                     {
-                        hpSuffix = $" <color=#FF5A4A>-{previewLoss}</color>";
+                        hpSuffix = $" <color=#5AB4FF>+{previewHealth}</color>";
+                    }
+                    else if (previewHealth < 0)
+                    {
+                        hpSuffix = $" <color=#FF5A4A>{previewHealth}</color>";
                     }
 
                     if (previewShield > 0)
@@ -2611,7 +2656,7 @@ namespace Puckmite.View
                 }
 
                 int pending = _handPending[actor].Count;
-                _statRowTexts[actor][0].text = $"{_actorHealth[actor]}/{BaseHealth(actor)}{hpSuffix}";
+                _statRowTexts[actor][0].text = $"{Mathf.Max(0, _actorHealth[actor] - _pendingShownHeal[actor])}/{BaseHealth(actor)}{hpSuffix}";
                 _statRowTexts[actor][1].text = $"x {_actorBaseShield[actor] + _actorEffectShield[actor] - _pendingShownShield[actor]}{shieldSuffix}";
                 _statRowTexts[actor][2].text = $"x {BaseAttack(actor) + _actorBuffAttack[actor] - _pendingShownAttack[actor]}{attackSuffix}";
                 _statRowTexts[actor][3].text = pending > 0
@@ -2929,8 +2974,15 @@ namespace Puckmite.View
             }
 
             int value = _sim.Layout.ValueOf(col, row);
-            string kind = _sim.Layout.KindOf(col, row) == BuffKind.Attack ? "공격" : "쉴드";
-            string effect = _sim.Layout.KindOf(col, row) == BuffKind.Attack ? "공격력" : "쉴드";
+            string kind;
+            string effect;
+            switch (_sim.Layout.KindOf(col, row))
+            {
+                case BuffKind.Attack: kind = "공격"; effect = "공격력"; break;
+                case BuffKind.Shield: kind = "쉴드"; effect = "쉴드"; break;
+                default: kind = "회복"; effect = "체력 회복"; break;
+            }
+
             DrawCursorTooltip($"{kind} 칸 lv{value}\n올라간 스톤 포인트만큼 {effect} +{value}");
         }
     }
