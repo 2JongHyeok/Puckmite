@@ -39,6 +39,7 @@ namespace Puckmite.View
         private SpriteRenderer[] _shopCellViews;
         private SpriteRenderer _merchantView;
         private SpriteRenderer _pendingCellGhost;
+        private TextMeshPro _pendingGuideText; // "우클릭으로 구매 취소", left of the board while carrying
         private bool _shopUsesArt; // cell-sheet frames wired: cells wear frames, flat quads otherwise
 
         // Per-cell stack gauge and level sparkles (사용자 지정 2026-08-09): each same-kind placement
@@ -782,6 +783,14 @@ namespace Puckmite.View
             _pendingCellGhost.sortingOrder = 4;
             _pendingCellGhost.enabled = false;
 
+            // The carry guide (사용자 지정 2026-08-10): while a bought cell rides the cursor, a big
+            // Korean line left of the board — vertically on the board's centre — says right-click
+            // cancels the purchase. Replaces the old English IMGUI hint along the top.
+            _pendingGuideText = SideText(transform, "PendingGuide", "우클릭으로\n구매 취소",
+                new Vector2(-17f, 0f), new Vector2(8.5f, 7f), TextAlignmentOptions.Center, 16f, 15);
+            _pendingGuideText.color = new Color(1f, 0.92f, 0.55f); // the merchant label's warm yellow
+            _pendingGuideText.gameObject.SetActive(false);
+
             BuildShopSideUi();
         }
 
@@ -936,9 +945,37 @@ namespace Puckmite.View
             int attack = _leaving ? _shownAttack : _tuning.PlayerBaseAttack + Campaign.BonusAttack;
             int current = Campaign.NextRunHealth == 0 ? maxHealth : Mathf.Min(Campaign.NextRunHealth, maxHealth);
 
-            _statRowTexts[0].text = current + "/" + maxHealth;
-            _statRowTexts[1].text = "x " + shield;
-            _statRowTexts[2].text = "x " + attack;
+            // Live settlement preview (사용자 지정 2026-08-10): what leaving right now would buy, from
+            // where the stones sit — blue beside the stat, gone during the leave flight (the numbers
+            // tick up for real then). RunHeal has no row of its own and stays out.
+            string hpSuffix = "";
+            string shieldSuffix = "";
+            string attackSuffix = "";
+            if (!_leaving)
+            {
+                UpgradeTotals pending = Campaign.ShopBoard.SumUpgrades(_sim, OccupancyThreshold);
+                int gainMax = pending.MaxHealth * _tuning.GainMaxHealth;
+                int gainShield = pending.Shield * _tuning.GainShield;
+                int gainAttack = pending.Attack * _tuning.GainAttack;
+                if (gainMax > 0)
+                {
+                    hpSuffix = $" <color=#5AB4FF>+{gainMax}</color>";
+                }
+
+                if (gainShield > 0)
+                {
+                    shieldSuffix = $" <color=#5AB4FF>+{gainShield}</color>";
+                }
+
+                if (gainAttack > 0)
+                {
+                    attackSuffix = $" <color=#5AB4FF>+{gainAttack}</color>";
+                }
+            }
+
+            _statRowTexts[0].text = current + "/" + maxHealth + hpSuffix;
+            _statRowTexts[1].text = "x " + shield + shieldSuffix;
+            _statRowTexts[2].text = "x " + attack + attackSuffix;
             _statRowTexts[3].text = "x " + (_tuning.PlayerStoneCount + Campaign.ExtraBattleStones);
         }
 
@@ -1487,7 +1524,13 @@ namespace Puckmite.View
             }
 
             _pendingCellGhost.enabled = false;
-            if (!_hasPendingCell || _merchantOpen || _confirmReplaceOpen || _leaveConfirmOpen)
+            bool carrying = _hasPendingCell && !_merchantOpen && !_confirmReplaceOpen && !_leaveConfirmOpen;
+            if (_pendingGuideText != null && _pendingGuideText.gameObject.activeSelf != carrying)
+            {
+                _pendingGuideText.gameObject.SetActive(carrying); // the right-click guide rides the carry
+            }
+
+            if (!carrying)
             {
                 return;
             }
@@ -1644,7 +1687,7 @@ namespace Puckmite.View
                 return true;
             }
 
-            return gui.y <= 90f; // the pending-cell hint along the top
+            return gui.y <= 90f; // the reserved strip along the top (the old IMGUI hint's home)
         }
 
         // --- Shop GUI -----------------------------------------------------------------------------
@@ -1686,14 +1729,8 @@ namespace Puckmite.View
             }
 
             // Gold lives on the world-space signpost readout now, the stone count and the shop controls
-            // in the world-space side column, and the placement log is gone (사용자 지정); IMGUI keeps
-            // only the pending-cell hint and the tooltips.
-            if (_hasPendingCell)
-            {
-                GUI.Label(new Rect(Screen.width * 0.5f - 220f, 38f, 520f, 24f),
-                    $"Placing {UpgradeName(_pendingCell)} — right-click to cancel", rich);
-            }
-
+            // in the world-space side column, and the carry hint is the world-space guide left of the
+            // board (사용자 지정 2026-08-10); IMGUI keeps only the tooltips.
             DrawBoardCellTooltip();
         }
 

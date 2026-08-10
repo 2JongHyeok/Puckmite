@@ -303,7 +303,8 @@ namespace Puckmite.Sim
             }
 
             float score = SnipeScore(config, firstContactId, _struckIds)
-                + ScoreOwnPlacement(clone, ownStoneIds, launchedId, occupancyThreshold, weights);
+                + ScoreOwnPlacement(clone, ownStoneIds, launchedId, occupancyThreshold, weights)
+                - AnchorCentralPenalty(clone, cueId);
 
             // Health deltas, compared against the pre-shot state. Opposing losses score up; own losses
             // (including the launched stone, which started at the template's health) score down — except
@@ -443,6 +444,7 @@ namespace Puckmite.Sim
 
             score += SnipeScore(config, firstContactId, _struckIds);
             score += ScoreOwnPlacement(clone, ownStoneIds, cueIsNewStone ? cueId : -1, occupancyThreshold, weights);
+            score -= AnchorCentralPenalty(clone, cueId);
 
             // The only own loss the player could predict is the cue's: one health per cross-team contact,
             // already applied inside the clone. Struck own stones vanished — their fate is unknown, unscored.
@@ -454,6 +456,36 @@ namespace Puckmite.Sim
             }
 
             return score;
+        }
+
+        // 반석형 중앙 지향 (사용자 지정 2026-08-10): a rolled anchor aims for the board centre or an edge
+        // midpoint, never a corner — an anchor plowing a stone into a corner wall-pins it. The pull is a
+        // per-unit-distance penalty that dwarfs the placement terms, so central parks always outrank
+        // corner shots, in both prediction modes. Zero for every other cue (or a cue that died en route).
+        private const float AnchorCentralPull = 4f;
+
+        private static float AnchorCentralPenalty(PuckSim clone, int cueId)
+        {
+            if (!clone.TryGetPuck(cueId, out Puck cue) || cue.Trait != StoneTrait.Anchor)
+            {
+                return 0f;
+            }
+
+            Vector2 min = clone.BoardMin;
+            Vector2 max = clone.BoardMax;
+            Vector2 centre = (min + max) * 0.5f;
+            float inset = cue.Radius;
+
+            float best = (cue.Position - centre).magnitude;
+            float d = (cue.Position - new Vector2(centre.x, max.y - inset)).magnitude;
+            if (d < best) { best = d; }
+            d = (cue.Position - new Vector2(centre.x, min.y + inset)).magnitude;
+            if (d < best) { best = d; }
+            d = (cue.Position - new Vector2(min.x + inset, centre.y)).magnitude;
+            if (d < best) { best = d; }
+            d = (cue.Position - new Vector2(max.x - inset, centre.y)).magnitude;
+            if (d < best) { best = d; }
+            return AnchorCentralPull * best;
         }
 
         // Buffs the acting side's surviving stones would capture where they now rest (cellValue * level,

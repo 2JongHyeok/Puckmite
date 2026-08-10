@@ -61,6 +61,8 @@ namespace Puckmite.Sim
                 BombExplosionCheck(),
                 AnchorCheck(),
                 AnchorPairCheck(),
+                AnchorCornerPinCheck(),
+                AnchorAimCheck(),
                 SniperDamageCheck(),
                 SniperPlanCheck(),
             };
@@ -1079,6 +1081,118 @@ namespace Puckmite.Sim
             string detail =
                 $"resterStayed={resterStayed}, rolledRestX={rolled.Position.x:F2}(exp < -4.5), separated={separated}, hp={rolled.Health}/{rester.Health}(exp 2/2).";
             return new CheckResult("Anchor pair", passed, detail);
+        }
+
+        /// <summary>An anchor plowing a stone against the wall must not come to rest overlapping it
+        /// (사용자 보고 2026-08-10): the wall outranks the anchor, so the separation the wall refuses
+        /// pushes the anchor back instead.</summary>
+        public static CheckResult AnchorCornerPinCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            // Health far above the contact count: the pinned stone rattles between wall and anchor,
+            // paying 1 per approaching contact — dozens over a long plow. The check is geometric.
+            sim.AddPuck(new Puck(0, new Vector2(-11f, -11f), 1.5f, 1f, PuckOwner.Player) { Health = 500 }); // pinned in the corner
+            sim.AddPuck(new Puck(1, new Vector2(-11f, -5f), 1.5f, 1f, PuckOwner.Enemy)
+            {
+                Health = 500,
+                Trait = StoneTrait.Anchor,
+                Velocity = new Vector2(0f, -25f), // plows straight down the wall line
+            });
+
+            sim.RunToRest();
+
+            bool pinnedAlive = sim.TryGetPuck(0, out Puck pinned);
+            bool anchorAlive = sim.TryGetPuck(1, out Puck anchor);
+            bool bothAlive = pinnedAlive && anchorAlive;
+            bool separated = bothAlive && (pinned.Position - anchor.Position).magnitude >= 2.999f;
+            bool insideWalls = bothAlive
+                && pinned.Position.x >= -11.001f && pinned.Position.y >= -11.001f
+                && anchor.Position.x >= -11.001f && anchor.Position.y >= -11.001f;
+
+            bool passed = bothAlive && separated && insideWalls;
+            string detail = bothAlive
+                ? $"gap={(pinned.Position - anchor.Position).magnitude:F3}(exp >= 2.999), pinned=({pinned.Position.x:F2},{pinned.Position.y:F2}), anchor=({anchor.Position.x:F2},{anchor.Position.y:F2})."
+                : "a stone died — the pin scenario never completed.";
+            return new CheckResult("Anchor corner pin", passed, detail);
+        }
+
+        /// <summary>반석형 중앙 지향 (사용자 지정 2026-08-10): even with a bait stone parked by a corner,
+        /// the planner's anchor shot comes to rest nearer the board centre or an edge midpoint than any
+        /// corner.</summary>
+        public static CheckResult AnchorAimCheck()
+        {
+            PuckSim sim = new PuckSim(new Vector2(-12.5f, -12.5f), new Vector2(12.5f, 12.5f),
+                new PuckSimConfig(10f, 1f, 0.4f, 0.6f, 0.7f));
+            sim.AddPuck(new Puck(0, new Vector2(-9f, -9f), 1.5f, 1f, PuckOwner.Player) { Health = 5 }); // corner bait
+
+            Puck template = new Puck(9, Vector2.zero, 1.5f, 1f, PuckOwner.Enemy) { Health = 5, Trait = StoneTrait.Anchor };
+            List<Vector2> entrySpots = new List<Vector2>
+            {
+                new Vector2(11f, -11f), new Vector2(11f, -6f), new Vector2(11f, 0f), new Vector2(11f, 6f), new Vector2(11f, 11f),
+            };
+            EnemyPlanWeights weights = new EnemyPlanWeights
+            {
+                BuffAttack = 1f,
+                BuffShield = 1f,
+                DamageDealt = 3f,
+                StoneDestroyed = 2f,
+                OwnDamage = 2f,
+                OwnOnDamageCell = 1.5f,
+            };
+            EnemyPlanConfig config = new EnemyPlanConfig
+            {
+                CueDirections = 16,
+                EntryDirections = 8,
+                PowerFractions = new float[] { 0.4f, 0.7f, 1f },
+                FullRollout = false,
+                PickRank = 0f, // the top shot — the shaping must already rule it
+            };
+
+            bool found = EnemyPlanner.TryPlan(sim, PuckOwner.Enemy, new List<int>(), true, template, entrySpots, 50f, 0.1f, weights, config, out EnemyPlan plan);
+            if (!found || !plan.UseNewStone)
+            {
+                return new CheckResult("Anchor aim", false, $"found={found}, usedNewStone={plan.UseNewStone}.");
+            }
+
+            Puck launched = template;
+            launched.Position = plan.EntryPosition;
+            launched.Velocity = plan.Velocity;
+            sim.AddPuck(launched);
+            sim.RunToRest();
+
+            if (!sim.TryGetPuck(9, out Puck rest))
+            {
+                return new CheckResult("Anchor aim", false, "the planned anchor died in the roll-out.");
+            }
+
+            const float inset = 1.5f;
+            Vector2 centre = Vector2.zero;
+            float goal = DistToNearest(rest.Position,
+                centre,
+                new Vector2(0f, 12.5f - inset), new Vector2(0f, -12.5f + inset),
+                new Vector2(-12.5f + inset, 0f), new Vector2(12.5f - inset, 0f));
+            float corner = DistToNearest(rest.Position,
+                new Vector2(-11f, -11f), new Vector2(-11f, 11f), new Vector2(11f, -11f), new Vector2(11f, 11f));
+
+            bool central = goal < corner;
+            string detail = $"rest=({rest.Position.x:F2},{rest.Position.y:F2}), toGoal={goal:F2} < toCorner={corner:F2} = {central}.";
+            return new CheckResult("Anchor aim", central, detail);
+        }
+
+        private static float DistToNearest(Vector2 position, params Vector2[] targets)
+        {
+            float best = float.MaxValue;
+            for (int i = 0; i < targets.Length; i++)
+            {
+                float d = (position - targets[i]).magnitude;
+                if (d < best)
+                {
+                    best = d;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>저격 (design doc 4.3): the armed sniper stone's first player contact deals 2 and

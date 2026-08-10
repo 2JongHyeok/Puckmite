@@ -1606,6 +1606,12 @@ namespace Puckmite.View
                 return;
             }
 
+            // The arrow carries the impact's weight (사용자 지정 2026-08-10): a hard send is long and
+            // solid, a graze short and faint. Square-root curve so light hits still read.
+            float impact = Mathf.Sqrt(Mathf.Clamp01(struck.Velocity.magnitude / _tuning.MaxPower));
+            arrow.transform.localScale = new Vector3(Mathf.Lerp(0.7f, 2.4f, impact), 0.7f, 1f);
+            arrow.color = new Color(0.55f, 0.95f, 1f, Mathf.Lerp(0.35f, 1f, impact));
+
             Vector2 direction = struck.Velocity.normalized;
             Vector2 tail = struck.Position + direction * struck.Radius;
             arrow.transform.localPosition = new Vector3(tail.x, tail.y, 0f);

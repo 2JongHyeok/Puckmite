@@ -670,6 +670,28 @@ namespace Puckmite.Sim
             a.Position -= correction * invMassA;
             b.Position += correction * invMassB;
 
+            // A movable puck squeezed against a wall cannot absorb its separation share — the wall claws
+            // it back each step and the pair would come to rest overlapped (반석이 스톤을 구석으로 몰 때,
+            // 사용자 보고 2026-08-10). The wall outranks the anchor: whatever separation the wall refuses
+            // is handed to the immovable side instead. Ordinary pairs separate by impulse on their own.
+            if (aImmovable != bImmovable)
+            {
+                if (aImmovable)
+                {
+                    Vector2 clamped = ClampInsideWalls(b.Position, b.Radius);
+                    a.Position -= b.Position - clamped;
+                    b.Position = clamped;
+                    a.Position = ClampInsideWalls(a.Position, a.Radius); // double-pinch safety
+                }
+                else
+                {
+                    Vector2 clamped = ClampInsideWalls(a.Position, a.Radius);
+                    b.Position -= a.Position - clamped;
+                    a.Position = clamped;
+                    b.Position = ClampInsideWalls(b.Position, b.Radius);
+                }
+            }
+
             // Normal impulse with restitution, only when the pucks are moving toward each other. The
             // collision event fires here (not on mere overlap) so resting contact — corrected every
             // step but not approaching — does not spam a hit every frame.
@@ -746,6 +768,18 @@ namespace Puckmite.Sim
 
             _pucks[i] = a;
             _pucks[j] = b;
+        }
+
+        // Where a puck's centre may legally sit — the wall clamp's bounds, shared by the anchor pinch fix.
+        private Vector2 ClampInsideWalls(Vector2 position, float radius)
+        {
+            float minX = _boardMin.x + radius;
+            float maxX = _boardMax.x - radius;
+            float minY = _boardMin.y + radius;
+            float maxY = _boardMax.y - radius;
+            float x = position.x < minX ? minX : (position.x > maxX ? maxX : position.x);
+            float y = position.y < minY ? minY : (position.y > maxY ? maxY : position.y);
+            return new Vector2(x, y);
         }
 
         // 자폭 (design doc 4.3): the bomb dies (removed with its PuckDestroyed event at step end, physics

@@ -135,6 +135,13 @@ namespace Puckmite.View
         private bool _buffFlightActive;
         private float _postFlightTimer;             // the enemy's breath between landing and striking
         private const float EnemyStrikeDelay = 0.5f; // 사용자 지정 2026-08-10
+
+        // The handover beat (사용자 지정 2026-08-10): after the player's attack the incoming enemy —
+        // the boss's cast included — holds half a second before its turn opens, so nothing enemy-side
+        // lands on the same frame as the player's strike. Enemy→player stays immediate.
+        private const float TurnHandoverDelay = 0.5f;
+        private bool _turnStartPending;
+        private float _turnStartDelay;
         private const float BuffFlightLead = 0.15f;
         private int[] _pendingShownAttack;
         private int[] _pendingShownShield;
@@ -558,6 +565,18 @@ namespace Puckmite.View
                 }
             }
 
+            // The handover beat before an enemy's turn opens (사용자 지정 2026-08-10) — until it fires,
+            // the enemy's StartTurn (settlement, the boss cast) has not happened yet.
+            if (!_gameOver && _turnStartPending)
+            {
+                _turnStartDelay -= Time.deltaTime;
+                if (_turnStartDelay <= 0f)
+                {
+                    _turnStartPending = false;
+                    StartTurn();
+                }
+            }
+
             HandleInput();
             DriveSimulation();
             // Nothing to roll: after the beat that shows it, go straight to the attack (design doc 3.5).
@@ -592,7 +611,7 @@ namespace Puckmite.View
 
             // An enemy turn drives itself: after a short think pause, search for the best shot on a
             // background task (frames — and the idle animations — keep running), then fire the result.
-            if (!_gameOver && !_pauseMenuOpen && _tuning.EnemyAiEnabled && _currentActor != 0 && !_actorDead[_currentActor]
+            if (!_gameOver && !_pauseMenuOpen && !_turnStartPending && _tuning.EnemyAiEnabled && _currentActor != 0 && !_actorDead[_currentActor]
                 && !_hasRolledThisTurn && !_noStoneTurn && !_awaitingAttack && !_buffFlightActive && _sim.AllAtRest())
             {
                 if (_planTask == null)
@@ -611,7 +630,9 @@ namespace Puckmite.View
             }
 
             // Rolled and the board has settled: lock in the buff (step 3), fly it home, then attack.
-            if (!_gameOver && !_awaitingAttack && !_buffFlightActive && _hasRolledThisTurn && _sim.AllAtRest())
+            // Not during the handover beat — _hasRolledThisTurn is still the PREVIOUS turn's until the
+            // deferred StartTurn resets it.
+            if (!_gameOver && !_turnStartPending && !_awaitingAttack && !_buffFlightActive && _hasRolledThisTurn && _sim.AllAtRest())
             {
                 CaptureActorBuff(_currentActor);
                 if (!_gameOver) // corrupted shield cells can end the run inside the capture
@@ -712,11 +733,19 @@ namespace Puckmite.View
             // Every character is down; leave the current actor as is.
         }
 
-        // Moves to the next actor and begins its turn.
+        // Moves to the next actor and begins its turn — an incoming enemy after the handover beat
+        // (사용자 지정 2026-08-10), the player at once.
         private void AdvanceTurn()
         {
             DisarmSnipers(); // the armed 2-damage hit lives and dies with its owner's roll (design doc 4.3)
             _currentActor = (_currentActor + 1) % _actorCount;
+            if (_currentActor != 0)
+            {
+                _turnStartPending = true;
+                _turnStartDelay = TurnHandoverDelay;
+                return;
+            }
+
             StartTurn();
         }
 
@@ -1352,6 +1381,7 @@ namespace Puckmite.View
             _gameOver = false;
             _campaignCleared = false;
             _noStoneTurn = false;
+            _turnStartPending = false; // a rebuild opens via StartTurn directly, never mid-handover
             ClearGhost();
         }
 
@@ -1595,9 +1625,33 @@ namespace Puckmite.View
                 return;
             }
 
-            int attack = 0;
-            int shield = 0;
-            int healthLoss = 0;
+            SumPendingBuff(actor, out int attack, out int shield, out int healthLoss);
+
+            _actorBuffAttack[actor] = attack;
+            _actorEffectShield[actor] = shield; // effect shield refills to the buff amount (design doc 3.6)
+
+            if (healthLoss > 0)
+            {
+                _actorHealth[actor] -= healthLoss;
+                if (_actorHealth[actor] <= 0)
+                {
+                    _actorHealth[actor] = 0;
+                    KillActor(actor);
+                }
+
+                CheckGameOver();
+            }
+        }
+
+        // One walk shared by the turn-end capture and the live stat preview (사용자 지정 2026-08-10:
+        // 예상 능력치 — the two must never disagree): what the actor's stones would lock in from where
+        // they sit right now. Corrupted attack cells drain (attack may go negative); corrupted shield
+        // cells cost health instead of granting shield.
+        private void SumPendingBuff(int actor, out int attack, out int shield, out int healthLoss)
+        {
+            attack = 0;
+            shield = 0;
+            healthLoss = 0;
             BoardLayout layout = _sim.Layout;
             Vector2 boardMin = _sim.BoardMin;
             Vector2 boardMax = _sim.BoardMax;
@@ -1637,21 +1691,6 @@ namespace Puckmite.View
                         shield += gain;
                     }
                 }
-            }
-
-            _actorBuffAttack[actor] = attack;
-            _actorEffectShield[actor] = shield; // effect shield refills to the buff amount (design doc 3.6)
-
-            if (healthLoss > 0)
-            {
-                _actorHealth[actor] -= healthLoss;
-                if (_actorHealth[actor] <= 0)
-                {
-                    _actorHealth[actor] = 0;
-                    KillActor(actor);
-                }
-
-                CheckGameOver();
             }
         }
 
@@ -2497,6 +2536,19 @@ namespace Puckmite.View
                 return;
             }
 
+            // Live buff preview (사용자 지정 2026-08-10): what the player's stones would lock in from
+            // where they sit now, blue beside the stat — negatives (corrupted cells) in red. Shown only
+            // until the turn's buff is actually captured; after that it lives in the number itself.
+            int previewAttack = 0;
+            int previewShield = 0;
+            int previewLoss = 0;
+            bool preview = !_gameOver && _currentActor == 0 && !_actorDead[0]
+                && !_awaitingAttack && !_buffFlightActive;
+            if (preview)
+            {
+                SumPendingBuff(0, out previewAttack, out previewShield, out previewLoss);
+            }
+
             for (int actor = 0; actor < _actorCount; actor++)
             {
                 if (_actorDead[actor])
@@ -2530,10 +2582,35 @@ namespace Puckmite.View
                     UpdateCharacterOutline(actor);
                 }
 
+                string hpSuffix = "";
+                string shieldSuffix = "";
+                string attackSuffix = "";
+                if (preview && actor == 0)
+                {
+                    if (previewLoss > 0)
+                    {
+                        hpSuffix = $" <color=#FF5A4A>-{previewLoss}</color>";
+                    }
+
+                    if (previewShield > 0)
+                    {
+                        shieldSuffix = $" <color=#5AB4FF>+{previewShield}</color>";
+                    }
+
+                    if (previewAttack > 0)
+                    {
+                        attackSuffix = $" <color=#5AB4FF>+{previewAttack}</color>";
+                    }
+                    else if (previewAttack < 0)
+                    {
+                        attackSuffix = $" <color=#FF5A4A>{previewAttack}</color>";
+                    }
+                }
+
                 int pending = _handPending[actor].Count;
-                _statRowTexts[actor][0].text = $"{_actorHealth[actor]}/{BaseHealth(actor)}";
-                _statRowTexts[actor][1].text = $"x {_actorBaseShield[actor] + _actorEffectShield[actor] - _pendingShownShield[actor]}";
-                _statRowTexts[actor][2].text = $"x {BaseAttack(actor) + _actorBuffAttack[actor] - _pendingShownAttack[actor]}";
+                _statRowTexts[actor][0].text = $"{_actorHealth[actor]}/{BaseHealth(actor)}{hpSuffix}";
+                _statRowTexts[actor][1].text = $"x {_actorBaseShield[actor] + _actorEffectShield[actor] - _pendingShownShield[actor]}{shieldSuffix}";
+                _statRowTexts[actor][2].text = $"x {BaseAttack(actor) + _actorBuffAttack[actor] - _pendingShownAttack[actor]}{attackSuffix}";
                 _statRowTexts[actor][3].text = pending > 0
                     ? $"x {_handReady[actor].Count} (+{pending})"
                     : $"x {_handReady[actor].Count}";
@@ -2737,7 +2814,7 @@ namespace Puckmite.View
             {
                 case EnemyType.Striker: return "공격력이 높지만 체력이 낮다.";
                 case EnemyType.Tank: return "체력이 높지만 공격력이 낮다.";
-                case EnemyType.Twin: return "스톤을 2개 가진다.";
+                case EnemyType.Twin: return "스톤을 1개 더 보유한 채로 시작한다.";
                 case EnemyType.HardStone: return "스톤이 단단하다 (체력 +2).";
                 case EnemyType.Bomber: return "2턴마다 폭탄 스톤을 굴린다. 폭탄은 플레이어 스톤과 충돌하면 자폭해 주변에 2 피해를 주고 밀쳐낸다.";
                 case EnemyType.Anchor: return "스톤이 충돌에 밀리지 않고 그대로 되돌려친다.";

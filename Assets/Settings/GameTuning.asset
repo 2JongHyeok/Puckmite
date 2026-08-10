@@ -23,12 +23,12 @@ MonoBehaviour:
   PuckRadius: 1.5
   StoneHealth: 3
   CellDamage: 1
-  PlayerBaseHealth: 100
-  PlayerBaseAttack: 10
-  PlayerBaseShield: 100
+  PlayerBaseHealth: 20
+  PlayerBaseAttack: 1
+  PlayerBaseShield: 0
   RunEndHeal: 5
   PlayerStoneCount: 2
-  GoldPerKill: 100
+  GoldPerKill: 20
   ShopStonesPerVisit: 1
   PriceAttack: 5
   PriceShield: 5
@@ -45,7 +45,7 @@ MonoBehaviour:
   BattleStonePrice: 25
   NoStoneTurnDelay: 0.8
   EnemyAiEnabled: 1
-  AiDifficulty: 0
+  AiDifficulty: 4
   EnemyThinkDelay: 0.8
   AiBuffAttackWeight: 1
   AiBuffShieldWeight: 1
