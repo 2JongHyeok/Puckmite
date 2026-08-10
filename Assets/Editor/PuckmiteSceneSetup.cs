@@ -186,6 +186,10 @@ namespace Puckmite.EditorTools
                 // placeholders), so no warnings pile up while the art is still being drawn.
                 SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/gold"); // 사용자 아트 2026-08-10
                 SetOptionalSprite(controller, "_skipButtonSprite", "Assets/Art/Sprites/UI/btn_skip_roll");
+                // 전투 배속 버튼의 세 얼굴 (사용자 아트 2026-08-10: x1/x2/x4).
+                SetOptionalSprite(controller, "_speedX1Sprite", "Assets/Art/Sprites/UI/speed_sheet1");
+                SetOptionalSprite(controller, "_speedX2Sprite", "Assets/Art/Sprites/UI/speed_sheet2");
+                SetOptionalSprite(controller, "_speedX4Sprite", "Assets/Art/Sprites/UI/speed_sheet3");
                 WireAudioClip(controller, "_sfxBossSkill", "Assets/Sound/SFX/boss_skill.wav");
                 WireStatIcons(controller);
             }

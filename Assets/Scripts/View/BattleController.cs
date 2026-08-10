@@ -152,6 +152,27 @@ namespace Puckmite.View
         // 발사 스킵 (사용자 지정 2026-08-10): the pre-roll enemy click is gone — skipping the roll is
         // this explicit button under the left info column, art via the promised path UI/btn_skip_roll.
         [SerializeField] private Sprite _skipButtonSprite;
+
+        // 전투 배속 (사용자 지정 2026-08-10): one button under the skip, cycling x1→x2→x4 on click —
+        // one face per speed, the user's UI/speed_sheet1/2/3 art (40x26 each). The multiplier drives
+        // Time.timeScale; the ESC menu restores it through PlayTimeScale. A new battle starts at x1.
+        [SerializeField] private Sprite _speedX1Sprite;
+        [SerializeField] private Sprite _speedX2Sprite;
+        [SerializeField] private Sprite _speedX4Sprite;
+        private static readonly Vector2 SpeedButtonPos = new Vector2(-20f, -9.3f);
+        private static readonly Vector2 SpeedButtonSize = new Vector2(4.0f, 2.6f); // the art's 40x26 aspect
+        private static readonly int[] SpeedMultipliers = { 1, 2, 4 };
+        private int _speedIndex;
+        private SpriteRenderer _speedBg;
+        private SpriteRenderer _speedOutline;
+        private TextMeshPro _speedLabel; // art-less fallback face
+        private bool _speedUsesArt;
+
+        // 사용자 지정 2026-08-10: character idles must NOT speed up with the multiplier. Animators run
+        // on scaled time (so the ESC pause still freezes them); instead each idle's speed is divided by
+        // the multiplier, holding the real-time pace. Collected as the bodies are built.
+        private const float CharIdleSpeed = 0.5f; // idle plays at half speed (user-tuned feel)
+        private readonly List<Animator> _characterAnimators = new List<Animator>();
         // The box carries the art's own 200x38 aspect (사용자 지정 2026-08-10: 눌림 제거), shifted a
         // touch left so the wider face stays clear of the board's left entry edge.
         private static readonly Vector2 SkipButtonPos = new Vector2(-20f, -6f);
@@ -648,6 +669,7 @@ namespace Puckmite.View
             UpdateBossEffectVisuals();
             UpdateTurnHighlights();
             UpdateSkipButton();
+            UpdateSpeedButton();
             UpdateGhost();
             UpdateHoverHighlight(); // before the character row, which reads the hovered enemy
             UpdateCharacterStats();
@@ -2056,6 +2078,7 @@ namespace Puckmite.View
         // the team colour with a name + stat block below it that UpdateCharacterStats refreshes.
         private void BuildCharacters()
         {
+            _characterAnimators.Clear(); // a rebuild (domain-reload self-heal) re-collects the idles
             _statRowTexts = new TextMeshPro[_actorCount][];
             _statRowIcons = new SpriteRenderer[_actorCount][];
             _characterBodies = new SpriteRenderer[_actorCount];
@@ -2168,7 +2191,8 @@ namespace Puckmite.View
 
             if (go.TryGetComponent(out Animator animator))
             {
-                animator.speed = 0.5f; // idle plays at half speed (user-tuned feel)
+                animator.speed = CharIdleSpeed / SpeedMultipliers[_speedIndex];
+                _characterAnimators.Add(animator);
             }
 
             go.transform.localPosition = new Vector3(x, CharFeetY, 0f);
@@ -2217,7 +2241,8 @@ namespace Puckmite.View
 
             if (go.TryGetComponent(out Animator animator))
             {
-                animator.speed = 0.5f; // idle pace matches the hero's
+                animator.speed = CharIdleSpeed / SpeedMultipliers[_speedIndex]; // idle pace matches the hero's
+                _characterAnimators.Add(animator);
             }
 
             go.transform.localPosition = new Vector3(x, CharFeetY, 0f);
@@ -2715,6 +2740,7 @@ namespace Puckmite.View
             MakeInfoBox("StageBox", new Vector2(-19f, 9f), new Vector2(9f, 3.5f)).text = stage;
             _turnText = MakeInfoBox("TurnBox", new Vector2(-19f, 1.5f), new Vector2(9f, 6f));
             BuildSkipButton();
+            BuildSpeedButton();
         }
 
         // 발사 스킵 (사용자 지정 2026-08-10): under the turn box, spaced like the column above it. Art via
@@ -2747,6 +2773,110 @@ namespace Puckmite.View
                 _skipBg = label.transform.parent.Find("Bg").GetComponent<SpriteRenderer>();
             }
         }
+
+        // The speed toggle under the skip button: the current face, or an info-box "x1" label while the
+        // art is missing. Clicking cycles the multiplier (사용자 지정 2026-08-10: x1→x2→x4 순환).
+        private void BuildSpeedButton()
+        {
+            _speedOutline = MakeQuad("SpeedOutline", transform, SpeedButtonPos,
+                SpeedButtonSize + new Vector2(0.4f, 0.4f), new Color(1f, 0.9f, 0.25f, 0.9f), 14);
+            _speedOutline.enabled = false;
+
+            _speedUsesArt = _speedX1Sprite != null && _speedX2Sprite != null && _speedX4Sprite != null;
+            if (_speedUsesArt)
+            {
+                GameObject go = new GameObject("SpeedButton");
+                go.transform.SetParent(transform, false);
+                _speedBg = go.AddComponent<SpriteRenderer>();
+                _speedBg.sortingOrder = 15;
+            }
+            else
+            {
+                _speedLabel = MakeInfoBox("SpeedButton", SpeedButtonPos, SpeedButtonSize);
+                _speedBg = _speedLabel.transform.parent.Find("Bg").GetComponent<SpriteRenderer>();
+            }
+
+            UpdateSpeedFace();
+        }
+
+        private Sprite SpeedFaceSprite()
+        {
+            return _speedIndex == 0 ? _speedX1Sprite : _speedIndex == 1 ? _speedX2Sprite : _speedX4Sprite;
+        }
+
+        // Dresses the button for the current speed — the art face swaps whole (the sprites share one
+        // canvas), the fallback label rewrites its text.
+        private void UpdateSpeedFace()
+        {
+            if (_speedUsesArt)
+            {
+                Sprite face = SpeedFaceSprite();
+                _speedBg.sprite = face;
+                Bounds b = face.bounds;
+                Vector3 scale = new Vector3(SpeedButtonSize.x / b.size.x, SpeedButtonSize.y / b.size.y, 1f);
+                _speedBg.transform.localScale = scale;
+                _speedBg.transform.localPosition = new Vector3(
+                    SpeedButtonPos.x - b.center.x * scale.x, SpeedButtonPos.y - b.center.y * scale.y, 0f);
+            }
+            else
+            {
+                _speedLabel.text = "x" + SpeedMultipliers[_speedIndex];
+            }
+        }
+
+        // Clickable through the whole battle — speeding up the enemy's turn is the point — except under
+        // the ESC menu (timeScale is 0 there; PlayTimeScale restores the pick on close).
+        private void UpdateSpeedButton()
+        {
+            if (_speedBg == null)
+            {
+                return;
+            }
+
+            bool available = !_pauseMenuOpen;
+            Color bg = _speedUsesArt ? Color.white : new Color(0.14f, 0.17f, 0.24f, 0.9f);
+            if (!available)
+            {
+                bg.a *= 0.5f;
+            }
+
+            _speedBg.color = bg;
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                _speedOutline.enabled = false;
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            Vector2 world = ScreenToWorld(screen);
+            bool hover = available && !PointerOverHud(screen)
+                && Mathf.Abs(world.x - SpeedButtonPos.x) <= SpeedButtonSize.x * 0.5f
+                && Mathf.Abs(world.y - SpeedButtonPos.y) <= SpeedButtonSize.y * 0.5f;
+            _speedOutline.enabled = hover;
+
+            if (hover && mouse.leftButton.wasPressedThisFrame)
+            {
+                _speedIndex = (_speedIndex + 1) % SpeedMultipliers.Length;
+                Time.timeScale = PlayTimeScale;
+                UpdateSpeedFace();
+
+                // The idles hold their real-time pace against the multiplier (사용자 지정 2026-08-10:
+                // 배속에도 캐릭터 애니메이션은 그대로).
+                float idle = CharIdleSpeed / SpeedMultipliers[_speedIndex];
+                for (int i = 0; i < _characterAnimators.Count; i++)
+                {
+                    if (_characterAnimators[i] != null)
+                    {
+                        _characterAnimators[i].speed = idle;
+                    }
+                }
+            }
+        }
+
+        // The battle runs at the speed button's multiplier; the ESC menu's close restores it.
+        protected override float PlayTimeScale => SpeedMultipliers[_speedIndex];
 
         // The skip is a legal move exactly when a roll would be: the player's turn, nothing rolled or in
         // flight yet, the board at rest. Clicking locks the roll and flies the buff home.

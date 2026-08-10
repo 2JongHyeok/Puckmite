@@ -288,6 +288,11 @@ namespace Puckmite.View
         // implement it with the same one-liner.
         protected abstract void OnPauseMainMenu();
 
+        // What Time.timeScale should run at while the game is NOT paused — the battle overrides this
+        // with its speed button's multiplier (사용자 지정 2026-08-10: 전투 배속), so closing the ESC
+        // menu no longer stomps a x2/x4 speed back to 1.
+        protected virtual float PlayTimeScale => 1f;
+
         protected void UpdatePauseMenu()
         {
             Keyboard keyboard = Keyboard.current;
@@ -386,7 +391,7 @@ namespace Puckmite.View
                 _pauseRoot.SetActive(open);
             }
 
-            Time.timeScale = open ? 0f : 1f; // the whole game holds its breath under the menu
+            Time.timeScale = open ? 0f : PlayTimeScale; // the whole game holds its breath under the menu
             if (open)
             {
                 UpdatePauseSliderVisuals();
