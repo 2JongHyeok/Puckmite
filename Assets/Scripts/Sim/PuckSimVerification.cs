@@ -905,12 +905,11 @@ namespace Puckmite.Sim
         }
 
         /// <summary>The per-run roll (사용자 지정 2026-08-10): sweeping seeds, every board fields attack
-        /// 3~4 and shield 3~4 cells plus at most one heal cell (30% odds — the sweep's rate must sit
-        /// near it), the centre always a lv2 buff, other buffs lv1, the outer ring clean — and the same
-        /// seed rolls the same board twice.</summary>
+        /// 4~5 and shield 3~4 cells and never a heal cell (battle-board heal cut the same day), the
+        /// centre always a lv2 buff, other buffs lv1, the outer ring clean — and the same seed rolls
+        /// the same board twice.</summary>
         public static CheckResult LayoutRollCheck()
         {
-            int healBoards = 0;
             for (int seed = 0; seed < 200; seed++)
             {
                 BoardLayout layout = BoardLayout.Roll(new System.Random(seed));
@@ -958,22 +957,14 @@ namespace Puckmite.Sim
 
                 if (attack < BoardLayout.MinAttackCells || attack > BoardLayout.MaxAttackCells
                     || shield < BoardLayout.MinShieldCells || shield > BoardLayout.MaxShieldCells
-                    || heal < BoardLayout.MinHealCells || heal > BoardLayout.MaxHealCells
+                    || heal != 0
                     || !layout.IsBuff(2, 2))
                 {
                     return new CheckResult("Layout roll", false, $"seed {seed}: atk {attack}/shd {shield}/heal {heal}, centre buff={layout.IsBuff(2, 2)}.");
                 }
-
-                healBoards += heal;
             }
 
-            // 30% odds over 200 fixed seeds: allow a generous band so only a miswired chance fails.
-            if (healBoards < 40 || healBoards > 80)
-            {
-                return new CheckResult("Layout roll", false, $"heal boards {healBoards}/200 — expected near 30%.");
-            }
-
-            return new CheckResult("Layout roll", true, $"200 seeds: attack 3~4, shield 3~4, heal 30% ({healBoards}/200), centre lv2, others lv1, outer clean, deterministic.");
+            return new CheckResult("Layout roll", true, "200 seeds: attack 4~5, shield 3~4, no heal cells, centre lv2, others lv1, outer clean, deterministic.");
         }
 
         /// <summary>A clone carries the sim's layout, so previews and AI roll-outs sum buffs off the same
