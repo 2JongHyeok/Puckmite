@@ -422,20 +422,44 @@ namespace Puckmite.View
             }
         }
 
-        // Fills every slot afresh, bought-out ones included (design doc 5.3). The draw is view-level
+        // Fills every slot afresh, bought-out ones included (design doc 5.3), each slot drawn from the
+        // five offer weights (사용자 지정 2026-08-10: 공격 10%·쉴드 30%·최대체력 30%·회복 25%·전투
+        // 스톤 5%), normalised by their sum so live tuning cannot break the draw. View-level
         // UnityEngine.Random — the sim's determinism is untouched.
         private void RerollOffers()
         {
             _shopOffers.Clear();
             for (int i = 0; i < ShopOfferSlots; i++)
             {
-                if (Random.value < _tuning.BattleStoneChance)
+                float total = _tuning.OfferAttackChance + _tuning.OfferShieldChance
+                    + _tuning.OfferMaxHealthChance + _tuning.OfferRunHealChance + _tuning.OfferBattleStoneChance;
+                if (total <= 0f)
+                {
+                    // Every weight zeroed out (a live-tuning corner): fall back to a plain uniform cell.
+                    _shopOffers.Add(new ShopOffer { Type = OfferType.Cell, Kind = (UpgradeKind)Random.Range(0, 4) });
+                    continue;
+                }
+
+                float r = Random.value * total;
+                if ((r -= _tuning.OfferBattleStoneChance) < 0f)
                 {
                     _shopOffers.Add(new ShopOffer { Type = OfferType.BattleStone });
                 }
+                else if ((r -= _tuning.OfferAttackChance) < 0f)
+                {
+                    _shopOffers.Add(new ShopOffer { Type = OfferType.Cell, Kind = UpgradeKind.Attack });
+                }
+                else if ((r -= _tuning.OfferShieldChance) < 0f)
+                {
+                    _shopOffers.Add(new ShopOffer { Type = OfferType.Cell, Kind = UpgradeKind.Shield });
+                }
+                else if ((r -= _tuning.OfferMaxHealthChance) < 0f)
+                {
+                    _shopOffers.Add(new ShopOffer { Type = OfferType.Cell, Kind = UpgradeKind.MaxHealth });
+                }
                 else
                 {
-                    _shopOffers.Add(new ShopOffer { Type = OfferType.Cell, Kind = (UpgradeKind)Random.Range(0, 4) });
+                    _shopOffers.Add(new ShopOffer { Type = OfferType.Cell, Kind = UpgradeKind.RunHeal });
                 }
             }
         }

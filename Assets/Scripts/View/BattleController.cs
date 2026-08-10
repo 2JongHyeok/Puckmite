@@ -163,6 +163,17 @@ namespace Puckmite.View
         private static readonly Vector2 SpeedButtonSize = new Vector2(4.0f, 2.6f); // the art's 40x26 aspect
         private static readonly int[] SpeedMultipliers = { 1, 2, 4 };
         private int _speedIndex;
+
+        // The pick survives the shop round-trip (사용자 지정 2026-08-10: 상점 갔다 와도 배속 유지) —
+        // scene loads rebuild the controller, so it lives in a static, reset per play session like
+        // GameFlow's campaign.
+        private static int _sessionSpeedIndex;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetSessionSpeed()
+        {
+            _sessionSpeedIndex = 0;
+        }
         private SpriteRenderer _speedBg;
         private SpriteRenderer _speedOutline;
         private TextMeshPro _speedLabel; // art-less fallback face
@@ -365,6 +376,10 @@ namespace Puckmite.View
 
         protected override void BuildMode()
         {
+            // Last battle's speed pick carries over the shop round-trip (사용자 지정 2026-08-10) —
+            // restored before the characters build, so their idle compensation reads the right index.
+            _speedIndex = _sessionSpeedIndex;
+
             // The run's board deal (사용자 지정 2026-08-10: 버프칸은 런마다 랜덤): the view rolls the
             // seed, the sim carries the layout — so previews and the AI search see the same board
             // through Clone, and the physics-slider rebuild carries it like the hole.
@@ -384,6 +399,7 @@ namespace Puckmite.View
             StartTurn();
             UpdatePuckTransforms();
             UpdateCharacterStats();
+            Time.timeScale = PlayTimeScale; // re-apply the carried speed (base Awake resets it to 1)
         }
 
         // Every stone in the current run, with the actor of each entry recorded in _rosterActors in
@@ -2875,6 +2891,7 @@ namespace Puckmite.View
             if (hover && mouse.leftButton.wasPressedThisFrame)
             {
                 _speedIndex = (_speedIndex + 1) % SpeedMultipliers.Length;
+                _sessionSpeedIndex = _speedIndex; // the next battle opens at this speed
                 Time.timeScale = PlayTimeScale;
                 UpdateSpeedFace();
 

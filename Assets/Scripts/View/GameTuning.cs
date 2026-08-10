@@ -47,7 +47,13 @@ namespace Puckmite.View
         public int ShopStonePrice = 15;        // extra shop stone, permanent from this visit on (사용자 지정 2026-08-10)
         public int ShopStonePriceStep = 15;    // added per stone already bought — the price climbs for the campaign
         public int RerollBasePrice = 5;        // every reroll, flat (사용자 지정 2026-08-10: 가격 상승 없음)
-        [Range(0f, 1f)] public float BattleStoneChance = 0.1f; // per-slot odds an offer is a battle stone (design doc 5.3)
+        // 상점 진열 확률 (사용자 지정 2026-08-10): 공격 10%·쉴드 30%·최대체력 30%·회복 25%·전투 스톤
+        // 5%. The draw normalises by their sum, so live tuning cannot break it.
+        [Range(0f, 1f)] public float OfferAttackChance = 0.10f;
+        [Range(0f, 1f)] public float OfferShieldChance = 0.30f;
+        [Range(0f, 1f)] public float OfferMaxHealthChance = 0.30f;
+        [Range(0f, 1f)] public float OfferRunHealChance = 0.25f;
+        [Range(0f, 1f)] public float OfferBattleStoneChance = 0.05f;
         public int BattleStonePrice = 25;      // battle stone: +1 roster stone until defeat (design doc 5.6)
 
         [Header("New stone entry")]
