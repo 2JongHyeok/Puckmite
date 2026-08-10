@@ -3146,6 +3146,23 @@ namespace Puckmite.View
                 return;
             }
 
+            // A stone under the cursor beats a reading (사용자 지정 2026-08-10): the waiting entry
+            // ghost or ANY board stone, enemy ones included — that hover is about the stone, not the
+            // cell beneath it.
+            if (GhostVisible() && (world - _ghost.Position).magnitude <= GrabRadius())
+            {
+                return;
+            }
+
+            IReadOnlyList<Puck> pucks = _sim.Pucks;
+            for (int i = 0; i < pucks.Count; i++)
+            {
+                if ((world - pucks[i].Position).magnitude <= pucks[i].Radius)
+                {
+                    return; // 호버는 원 반경 — the aiming rule's own radius
+                }
+            }
+
             // A cell the boss swallowed reads as the drop it now is, not as the buff it used to be
             // (사용자 지정 2026-08-10 — 문구도 사용자 지정).
             if (col + row * BoardCells.Size == _sim.HoleCell)
@@ -3154,15 +3171,9 @@ namespace Puckmite.View
                 return;
             }
 
-            // The outer damage ring (사용자 지정 2026-08-10) — quiet while the cursor sits on the
-            // player's waiting ghost, which parks on this very ring to be grabbed.
+            // The outer damage ring (사용자 지정 2026-08-10).
             if (BoardCells.TypeOf(col, row) == CellType.Damage)
             {
-                if (GhostVisible() && (world - _ghost.Position).magnitude <= GrabRadius())
-                {
-                    return;
-                }
-
                 DrawCursorTooltip($"데미지 칸\n자신의 턴이 돌아올 때, 해당 칸 위에 있는 스톤 체력 -{_tuning.CellDamage}");
                 return;
             }
