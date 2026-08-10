@@ -52,19 +52,19 @@ namespace Puckmite.Game
         {
             new[]
             {
-                new RunSpec(RunMonsters.Slime,             1,  20,  0, 1, 1), // 1-1
-                new RunSpec(RunMonsters.RandomExceptSlime, 1,  20,  0, 2, 1), // 1-2
-                new RunSpec(RunMonsters.Random,            2,  20,  0, 2, 1), // 1-3
-                new RunSpec(RunMonsters.Random,            2,  20,  5, 2, 1), // 1-4
-                new RunSpec(RunMonsters.Boss,              1,  50, 10, 3, 1), // 1-5
+                new RunSpec(RunMonsters.Slime,             1,  10,  0, 1, 1), // 1-1
+                new RunSpec(RunMonsters.RandomExceptSlime, 1,  10,  0, 1, 1), // 1-2
+                new RunSpec(RunMonsters.Random,            2,  10,  0, 1, 1), // 1-3
+                new RunSpec(RunMonsters.Random,            2,  10,  5, 1, 1), // 1-4
+                new RunSpec(RunMonsters.Boss,              1,  30, 10, 3, 1), // 1-5
             },
             new[]
             {
                 new RunSpec(RunMonsters.Random,            2,  20, 10, 2, 2), // 2-1
                 new RunSpec(RunMonsters.Random,            2,  20, 20, 2, 2), // 2-2
                 new RunSpec(RunMonsters.Random,            3,  20, 10, 2, 2), // 2-3
-                new RunSpec(RunMonsters.Random,            3,  30, 10, 4, 2), // 2-4
-                new RunSpec(RunMonsters.Boss,              1, 100, 30, 5, 3), // 2-5
+                new RunSpec(RunMonsters.Random,            3,  30, 10, 2, 2), // 2-4
+                new RunSpec(RunMonsters.Boss,              1, 100, 30, 3, 3), // 2-5
             },
         };
 
