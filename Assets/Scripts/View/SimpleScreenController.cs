@@ -177,6 +177,10 @@ namespace Puckmite.View
                     fontStyle = FontStyle.Bold,
                     alignment = TextAnchor.MiddleCenter,
                 };
+                if (KoreanFont.LegacyFont() != null)
+                {
+                    heading.font = KoreanFont.LegacyFont(); // IMGUI default font: no Korean, no OS fallback on web
+                }
                 GUI.Label(new Rect(midX - 300f, headingY, 600f, 80f), Heading, heading);
                 buttonY = headingY + 110f;
             }
@@ -191,6 +195,10 @@ namespace Puckmite.View
             }
 
             GUIStyle button = new GUIStyle(GUI.skin.button) { fontSize = 20 };
+            if (KoreanFont.LegacyFont() != null)
+            {
+                button.font = KoreanFont.LegacyFont();
+            }
             if (GUI.Button(new Rect(midX - 110f, buttonY, 220f, 48f), ButtonLabel, button))
             {
                 OnButton();

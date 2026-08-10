@@ -18,8 +18,8 @@ MonoBehaviour:
   RestThreshold: 0.4
   WallRestitution: 0.6
   MaxPower: 50
-  PowerScale: 6
-  PowerCurve: 1
+  PowerScale: 3
+  PowerCurve: 1.0020238
   PuckRadius: 1.5
   StoneHealth: 3
   CellDamage: 1

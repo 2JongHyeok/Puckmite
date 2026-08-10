@@ -1284,7 +1284,8 @@ namespace Puckmite.View
             float maxPower = _tuning.MaxPower;
 
             _planTemplate = template;
-            _planTask = System.Threading.Tasks.Task.Run(() =>
+
+            EnemyPlanOutcome Plan()
             {
                 System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
                 bool planned = EnemyPlanner.TryPlan(
@@ -1297,7 +1298,22 @@ namespace Puckmite.View
                     Plan = plan,
                     Milliseconds = (float)stopwatch.Elapsed.TotalMilliseconds,
                 };
-            });
+            }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // The web player has no thread pool: a Task.Run body would never start and the completion
+            // poll would wait forever, so the search runs synchronously — one hitch in the enemy's turn.
+            try
+            {
+                _planTask = System.Threading.Tasks.Task.FromResult(Plan());
+            }
+            catch (System.Exception error)
+            {
+                _planTask = System.Threading.Tasks.Task.FromException<EnemyPlanOutcome>(error);
+            }
+#else
+            _planTask = System.Threading.Tasks.Task.Run(Plan);
+#endif
         }
 
         // Fires the finished search's best shot on the main thread, exactly as if a hand had rolled it —

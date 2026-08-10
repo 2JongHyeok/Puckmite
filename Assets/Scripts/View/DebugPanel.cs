@@ -8,6 +8,8 @@ namespace Puckmite.View
     /// The old playtest panel behind F1: diagnostics, the tuning sliders (writing into the shared
     /// GameTuning asset), playback speed, and the battle-only AI controls. Lives in both scenes; its
     /// visibility and the speed are static so they survive scene loads within a session.
+    /// Editor-only: the F1 toggle is compiled out of player builds (사용자 지정 2026-08-10), so a
+    /// shipped build can never open it.
     /// </summary>
     public sealed class DebugPanel : MonoBehaviour
     {
@@ -51,11 +53,13 @@ namespace Puckmite.View
 
         private void Update()
         {
+#if UNITY_EDITOR
             Keyboard keyboard = Keyboard.current;
             if (keyboard != null && keyboard.f1Key.wasPressedThisFrame)
             {
                 _visible = !_visible;
             }
+#endif
         }
 
         private void OnGUI()

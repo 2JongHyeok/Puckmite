@@ -1005,19 +1005,32 @@ namespace Puckmite.View
 
         // The cursor-trailing IMGUI tooltip, at three times the default label size (사용자 지정
         // 2026-08-10: 툴팁 3배) and clamped onto the screen. Shared by the battle's cell tooltip and
-        // the shop's cell/offer tooltips.
+        // the shop's cell/offer tooltips. Drawn with the bundled Korean font: IMGUI's default font has
+        // no Korean glyphs, and the web player has no OS-font fallback to hide that. Every metric is
+        // scaled by the view height — reference 1080, where the tuned size holds — so the tooltip keeps
+        // its proportion in the web player's smaller canvas (사용자 지정 2026-08-10).
         protected static void DrawCursorTooltip(string text)
         {
-            GUIStyle style = new GUIStyle(GUI.skin.label) { richText = true, fontSize = 36, wordWrap = true };
+            float scale = Screen.height / 1080f;
+            GUIStyle style = new GUIStyle(GUI.skin.label)
+            {
+                richText = true,
+                fontSize = Mathf.Max(1, Mathf.RoundToInt(36f * scale)),
+                wordWrap = true,
+            };
+            if (KoreanFont.LegacyFont() != null)
+            {
+                style.font = KoreanFont.LegacyFont();
+            }
             GUIContent content = new GUIContent(text);
-            float width = Mathf.Min(760f, style.CalcSize(content).x + 12f);
+            float width = Mathf.Min(760f * scale, style.CalcSize(content).x + 12f * scale);
             float height = style.CalcHeight(content, width);
             Vector2 m = Event.current.mousePosition;
-            float x = Mathf.Min(m.x + 18f, Screen.width - width - 28f);
-            float y = Mathf.Min(m.y + 18f, Screen.height - height - 24f);
-            GUI.Box(new Rect(x, y, width + 20f, height + 14f), GUIContent.none);
-            GUI.Box(new Rect(x, y, width + 20f, height + 14f), GUIContent.none); // stacked for opacity
-            GUI.Label(new Rect(x + 10f, y + 7f, width, height), text, style);
+            float x = Mathf.Min(m.x + 18f * scale, Screen.width - width - 28f * scale);
+            float y = Mathf.Min(m.y + 18f * scale, Screen.height - height - 24f * scale);
+            GUI.Box(new Rect(x, y, width + 20f * scale, height + 14f * scale), GUIContent.none);
+            GUI.Box(new Rect(x, y, width + 20f * scale, height + 14f * scale), GUIContent.none); // stacked for opacity
+            GUI.Label(new Rect(x + 10f * scale, y + 7f * scale, width, height), text, style);
         }
 
         // Drawn and grabbable only while it is tracking the cursor, or while it is the stone being aimed.
@@ -1354,7 +1367,9 @@ namespace Puckmite.View
                 tmp.fontSizeMin = 1f;
                 tmp.fontSizeMax = 300f;
                 tmp.rectTransform.sizeDelta = new Vector2(p.Radius * 1.3f, p.Radius * 1.5f);
-                tmp.color = Color.white;
+                // Dark on purpose: every stone body is a light tint (사용자 지정 2026-08-10 — a white
+                // number on the white-faced stones was unreadable).
+                tmp.color = new Color(0.13f, 0.13f, 0.15f);
                 MeshRenderer levelMr = levelGo.GetComponent<MeshRenderer>();
                 levelMr.sortingOrder = 12; // above the puck circle and arcs
                 levelMr.enabled = false;
