@@ -103,6 +103,8 @@ namespace Puckmite.View
         [SerializeField] private Sprite _healthIconSprite;
         [SerializeField] private Sprite _shieldIconSprite;
         [SerializeField] private Sprite _attackIconSprite;
+        [SerializeField] private Sprite _runHealIconSprite; // stat sheet Frame_5, the green heal heart
+        [SerializeField] private Sprite _goldIconSprite;    // UI/gold (사용자 아트 2026-08-10)
         private const float HeroX = 0f;
         private const float HeroBodyHeight = 6.4f;  // battle's CharBodyHeight
         private const float StatRowHeight = 1.1f;
@@ -124,12 +126,14 @@ namespace Puckmite.View
         private int _shownShield;
         private int _shownAttack;
 
-        // Leaving with unrolled stones asks first (사용자 지정 2026-08-10): the difficulty picker's
-        // dress, [전투로 이동] settles and goes, [뒤로가기]/ESC returns to the board. Built lazily on
-        // the first open, like the pause menu.
+        // Leaving asks first (사용자 지정 2026-08-10): the difficulty picker's dress, an icon row of
+        // the buffs this settlement buys (글 말고 아이콘 — 사용자 지정), the unrolled-stones warning
+        // when any remain, then [전투로 이동] settles and goes, [뒤로가기]/ESC returns to the board.
+        // Built lazily on the first open, like the pause menu.
         private bool _leaveConfirmOpen;
         private GameObject _leaveConfirmRoot;
         private TextMeshPro _leaveConfirmBody;
+        private readonly TextMeshPro[] _leaveGainTexts = new TextMeshPro[4]; // 공격·쉴드·최대체력·회복
         private SpriteRenderer _leaveGoOutline;
         private SpriteRenderer _leaveGoBg;
         private SpriteRenderer _leaveBackOutline;
@@ -369,8 +373,8 @@ namespace Puckmite.View
                     fallbackTint = new Color(0.35f, 0.55f, 0.90f);
                     break;
                 case UpgradeKind.RunHeal:
-                    row = 0; landDelta = 0; sprite = _healthIconSprite;
-                    fallbackTint = new Color(0.90f, 0.30f, 0.30f);
+                    row = 0; landDelta = 0; sprite = _runHealIconSprite; // green heal heart (사용자 지정 2026-08-10)
+                    fallbackTint = new Color(0.45f, 0.95f, 0.5f);
                     break;
                 default: // MaxHealth
                     row = 0; landDelta = _tuning.GainMaxHealth; sprite = _healthIconSprite;
@@ -770,7 +774,7 @@ namespace Puckmite.View
 
             // The buying panel, hidden until the merchant is clicked (user mock 2026-08-09).
             _merchantPanel = new MerchantPanel(transform, ShopOfferSlots,
-                _shopPanelSprite, _closeButtonSprite, _rerollButtonSprite);
+                _shopPanelSprite, _closeButtonSprite, _rerollButtonSprite, _goldIconSprite);
             _merchantPanel.CloseClicked = () => _merchantOpen = false;
             _merchantPanel.RerollClicked = TryReroll;
             _merchantPanel.SlotClicked = OnMerchantSlotClicked;
@@ -1044,13 +1048,17 @@ namespace Puckmite.View
         }
 
         // The always-visible gold readout: the gold panel art parked right of the backdrop's signpost,
-        // its base on the field line (사용자 지정), refreshed every frame in UpdateShopSideUi.
+        // its base on the field line (사용자 지정), refreshed every frame in UpdateShopSideUi. The coin
+        // art replaces the "G" suffix (사용자 지정 2026-08-10).
         private void BuildGoldReadout()
         {
             SideRect(transform, "GoldReadoutBg", _goldPanelSprite, new Vector2(31.3f, 15.35f), new Vector2(8.4f, 3.9f),
                 _goldPanelSprite != null ? Color.white : new Color(0.28f, 0.33f, 0.44f), 15);
-            _goldReadoutText = SideText(transform, "GoldReadoutText", "0G", new Vector2(31.3f, 15.3f),
-                new Vector2(7.2f, 3.0f), TextAlignmentOptions.Center, 10f, 16);
+            SideRect(transform, "GoldReadoutCoin", _goldIconSprite != null ? _goldIconSprite : ProceduralSprites.Circle(),
+                new Vector2(28.7f, 15.3f), new Vector2(1.4f, 1.4f),
+                _goldIconSprite != null ? Color.white : new Color(1f, 0.823f, 0.29f), 16);
+            _goldReadoutText = SideText(transform, "GoldReadoutText", "0", new Vector2(32.45f, 15.3f),
+                new Vector2(4.5f, 3.0f), TextAlignmentOptions.MidlineLeft, 10f, 16);
             _goldReadoutText.color = new Color(1f, 0.823f, 0.29f);
         }
 
@@ -1197,8 +1205,11 @@ namespace Puckmite.View
             _buyOutline.enabled = false;
             _buyBg = SideRect(root, "BuyButton", _buyStoneButtonSprite, new Vector2(SideX, 0.2f), new Vector2(17f, 3.8f),
                 _buyStoneButtonSprite != null ? Color.white : new Color(0.28f, 0.33f, 0.44f), 16);
-            _buyPriceText = SideText(root, "BuyPrice", "0G", new Vector2(SideX, -2.4f),
-                new Vector2(8f, 2.6f), TextAlignmentOptions.Center, 10f, 16);
+            SideRect(root, "BuyPriceCoin", _goldIconSprite != null ? _goldIconSprite : ProceduralSprites.Circle(),
+                new Vector2(SideX - 1.5f, -2.4f), new Vector2(1.2f, 1.2f),
+                _goldIconSprite != null ? Color.white : new Color(1f, 0.823f, 0.29f), 16);
+            _buyPriceText = SideText(root, "BuyPrice", "0", new Vector2(SideX + 1.55f, -2.4f),
+                new Vector2(3.1f, 2.6f), TextAlignmentOptions.MidlineLeft, 10f, 16);
 
             _leaveOutline = SideRect(root, "LeaveOutline", null, new Vector2(SideX, -6.3f), new Vector2(17.5f, 4.3f), SideOutlineTint, 15);
             _leaveOutline.enabled = false;
@@ -1218,7 +1229,7 @@ namespace Puckmite.View
             // The signpost gold readout stays on through the modals (사용자 지정) — they never cover it.
             if (_goldReadoutText != null)
             {
-                _goldReadoutText.text = Campaign.Gold + "G";
+                _goldReadoutText.text = Campaign.Gold.ToString();
             }
 
             bool shown = !_merchantOpen && !_confirmReplaceOpen && !_leaveConfirmOpen;
@@ -1251,7 +1262,7 @@ namespace Puckmite.View
             _rollBg.color = canRoll ? Color.white : SideDimmed;
             _buyBg.color = canBuy ? Color.white : SideDimmed;
             _leaveBg.color = canLeave ? Color.white : SideDimmed;
-            _buyPriceText.text = StonePrice + "G";
+            _buyPriceText.text = StonePrice.ToString();
             _buyPriceText.color = Campaign.Gold >= StonePrice
                 ? new Color(1f, 0.823f, 0.29f)
                 : new Color(1f, 0.353f, 0.29f);
@@ -1288,21 +1299,15 @@ namespace Puckmite.View
             }
             else if (hoverLeave)
             {
-                // Unrolled stones are about to be wasted — ask first (사용자 지정 2026-08-10); with
-                // every stone thrown the leave is immediate, as before.
-                if (_shopStonesLeft > 0)
-                {
-                    SetLeaveConfirmOpen(true);
-                }
-                else
-                {
-                    LeaveShop();
-                }
+                // Always through the dialog now (사용자 지정 2026-08-10): it reports the settlement's
+                // buffs, warns about unrolled stones, and [전투로 이동] is what actually leaves.
+                SetLeaveConfirmOpen(true);
             }
         }
 
         // The leave-confirm dialog (사용자 지정 2026-08-10), in the difficulty picker's dress: thin gold
-        // frame, dark box, gold title — parked on the camera centre like the pause menu.
+        // frame, dark box, gold title — parked on the camera centre like the pause menu. Under the title
+        // sits the settlement's buff row as icons (사용자 지정: 글 말고 아이콘), then the warning line.
         private void BuildLeaveConfirm()
         {
             _leaveConfirmRoot = new GameObject("LeaveConfirm");
@@ -1310,26 +1315,46 @@ namespace Puckmite.View
             _leaveConfirmRoot.transform.localPosition = new Vector3(0f, 6.25f, 0f);
             Transform root = _leaveConfirmRoot.transform;
 
-            Vector2 panelSize = new Vector2(24f, 13.5f);
+            Vector2 panelSize = new Vector2(24f, 16f);
             SideRect(root, "Frame", null, Vector2.zero, panelSize + new Vector2(0.3f, 0.3f), new Color(0.72f, 0.55f, 0.22f), 40);
             SideRect(root, "PanelBg", null, Vector2.zero, panelSize, new Color(0.08f, 0.10f, 0.15f, 0.97f), 41);
 
-            TextMeshPro title = SideText(root, "Title", "상점을 떠나시겠습니까?", new Vector2(0f, 4.6f),
+            TextMeshPro title = SideText(root, "Title", "상점을 떠나시겠습니까?", new Vector2(0f, 5.8f),
                 new Vector2(20f, 2.2f), TextAlignmentOptions.Center, 8f, 45);
             title.color = new Color(1f, 0.85f, 0.35f);
-            _leaveConfirmBody = SideText(root, "Body", "", new Vector2(0f, 2.2f),
-                new Vector2(21f, 1.8f), TextAlignmentOptions.Center, 6f, 45);
+
+            // The settlement's buff row: [icon] +N per kind, the hero rows' icons at dialog scale.
+            Sprite[] gainIcons = { _attackIconSprite, _shieldIconSprite, _healthIconSprite, _runHealIconSprite };
+            Color[] gainTints =
+            {
+                new Color(0.95f, 0.60f, 0.20f),
+                new Color(0.35f, 0.55f, 0.90f),
+                new Color(0.90f, 0.30f, 0.30f),
+                new Color(0.45f, 0.95f, 0.5f),
+            };
+            for (int i = 0; i < 4; i++)
+            {
+                float x = -7.8f + 5.2f * i;
+                SideRect(root, $"GainIcon{i}", gainIcons[i] != null ? gainIcons[i] : ProceduralSprites.Unit(),
+                    new Vector2(x - 0.9f, 3.4f), new Vector2(1.3f, 1.3f),
+                    gainIcons[i] != null ? Color.white : gainTints[i], 45);
+                _leaveGainTexts[i] = SideText(root, $"GainValue{i}", "+0", new Vector2(x + 1.7f, 3.4f),
+                    new Vector2(2.7f, 1.8f), TextAlignmentOptions.MidlineLeft, 7f, 45);
+            }
+
+            _leaveConfirmBody = SideText(root, "Body", "", new Vector2(0f, 1.7f),
+                new Vector2(21f, 1.4f), TextAlignmentOptions.Center, 6f, 45);
 
             Vector2 buttonSize = new Vector2(17.6f, 3.4f);
-            _leaveGoOutline = SideRect(root, "GoOutline", null, new Vector2(0f, -0.6f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
+            _leaveGoOutline = SideRect(root, "GoOutline", null, new Vector2(0f, -1.0f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
             _leaveGoOutline.enabled = false;
-            _leaveGoBg = SideRect(root, "GoBg", null, new Vector2(0f, -0.6f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
-            SideText(root, "GoLabel", "전투로 이동", new Vector2(0f, -0.6f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
+            _leaveGoBg = SideRect(root, "GoBg", null, new Vector2(0f, -1.0f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
+            SideText(root, "GoLabel", "전투로 이동", new Vector2(0f, -1.0f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
 
-            _leaveBackOutline = SideRect(root, "BackOutline", null, new Vector2(0f, -4.6f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
+            _leaveBackOutline = SideRect(root, "BackOutline", null, new Vector2(0f, -5.2f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
             _leaveBackOutline.enabled = false;
-            _leaveBackBg = SideRect(root, "BackBg", null, new Vector2(0f, -4.6f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
-            SideText(root, "BackLabel", "뒤로가기", new Vector2(0f, -4.6f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
+            _leaveBackBg = SideRect(root, "BackBg", null, new Vector2(0f, -5.2f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
+            SideText(root, "BackLabel", "뒤로가기", new Vector2(0f, -5.2f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
 
             _leaveConfirmRoot.SetActive(false);
         }
@@ -1364,7 +1389,16 @@ namespace Puckmite.View
                 return;
             }
 
-            _leaveConfirmBody.text = $"아직 굴리지 않은 스톤이 {_shopStonesLeft}개 남아 있습니다.";
+            // What leaving right now buys — the same math as the settlement (사용자 지정: 아이콘 옆 수치).
+            UpgradeTotals totals = Campaign.ShopBoard.SumUpgrades(_sim, OccupancyThreshold);
+            _leaveGainTexts[0].text = "+" + totals.Attack * _tuning.GainAttack;
+            _leaveGainTexts[1].text = "+" + totals.Shield * _tuning.GainShield;
+            _leaveGainTexts[2].text = "+" + totals.MaxHealth * _tuning.GainMaxHealth;
+            _leaveGainTexts[3].text = "+" + totals.RunHeal * _tuning.GainRunHeal;
+
+            _leaveConfirmBody.text = _shopStonesLeft > 0
+                ? $"아직 굴리지 않은 스톤이 {_shopStonesLeft}개 남아 있습니다."
+                : "";
 
             Mouse mouse = Mouse.current;
             if (mouse == null)

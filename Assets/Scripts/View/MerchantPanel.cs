@@ -35,6 +35,7 @@ namespace Puckmite.View
             public SpriteRenderer Outline;
             public SpriteRenderer Face;
             public TextMeshPro Overlay;
+            public SpriteRenderer PriceIcon; // the gold coin beside the number (사용자 아트 2026-08-10)
             public TextMeshPro Price;
             public bool Sold;
             public bool Affordable;
@@ -57,7 +58,7 @@ namespace Puckmite.View
         /// tooltip reads this.</summary>
         public int HoveredSlot => _hoveredSlot;
 
-        public MerchantPanel(Transform parent, int slotCount, Sprite panelArt, Sprite closeArt, Sprite rerollArt)
+        public MerchantPanel(Transform parent, int slotCount, Sprite panelArt, Sprite closeArt, Sprite rerollArt, Sprite goldArt)
         {
             _root = new GameObject("MerchantPanel");
             _root.transform.SetParent(parent, false);
@@ -73,16 +74,18 @@ namespace Puckmite.View
             _closeBg = MakeRect(_root.transform, "CloseBg", closeArt, new Vector2(16.1f, 7.9f), new Vector2(2.6f, 2.6f),
                 closeArt != null ? Color.white : new Color(0.62f, 0.18f, 0.22f), 22);
 
-            // Reroll bar under the X: icon on the art's left, the cost written in its empty right half.
+            // Reroll bar under the X: icon on the art's left, coin + number in its empty right half
+            // (사용자 지정 2026-08-10: "G" 표기를 gold 아트로 교체).
             _rerollUsesArt = rerollArt != null;
             _rerollOutline = MakeRect(_root.transform, "RerollOutline", null, new Vector2(13.3f, 4.7f), new Vector2(6.0f, 3.0f), OutlineTint, 21);
             _rerollOutline.enabled = false;
             _rerollBg = MakeRect(_root.transform, "RerollBg", rerollArt, new Vector2(13.3f, 4.7f), new Vector2(5.6f, 2.6f),
                 _rerollUsesArt ? Color.white : ButtonTint, 22);
-            _rerollCost = MakeText(_root.transform, "RerollCost", "0G", new Vector2(14.0f, 4.65f), new Vector2(3.8f, 2.3f),
-                TextAlignmentOptions.Center, 10f, 23);
+            MakeCoin(_root.transform, "RerollCoin", goldArt, new Vector2(14.05f, 4.65f), 0.95f, 23);
+            _rerollCost = MakeText(_root.transform, "RerollCost", "0", new Vector2(15.9f, 4.65f), new Vector2(2.0f, 2.3f),
+                TextAlignmentOptions.MidlineLeft, 10f, 23);
 
-            // The three offer cards: cell-sheet faces the controller feeds in, price under each.
+            // The three offer cards: cell-sheet faces the controller feeds in, coin + price under each.
             _slots = new Slot[slotCount];
             for (int i = 0; i < slotCount; i++)
             {
@@ -98,12 +101,35 @@ namespace Puckmite.View
                 slot.Overlay = MakeText(group.transform, "Overlay", "", Vector2.zero, new Vector2(4.7f, 4.7f),
                     TextAlignmentOptions.Center, 10f, 23);
                 slot.Overlay.gameObject.SetActive(false);
-                slot.Price = MakeText(group.transform, "Price", "", new Vector2(0f, -3.8f), new Vector2(6.5f, 2.4f),
-                    TextAlignmentOptions.Center, 10f, 23);
+                slot.PriceIcon = MakeCoin(group.transform, "PriceCoin", goldArt, new Vector2(-1.5f, -3.8f), 1.0f, 23);
+                slot.Price = MakeText(group.transform, "Price", "", new Vector2(0.9f, -3.8f), new Vector2(2.8f, 2.4f),
+                    TextAlignmentOptions.MidlineLeft, 10f, 23);
                 _slots[i] = slot;
             }
 
             _root.SetActive(false);
+        }
+
+        // The gold coin: the user's art, or a gold-tinted disc while it is missing.
+        private static SpriteRenderer MakeCoin(Transform parent, string name, Sprite goldArt, Vector2 pos, float height, int order)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+
+            SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+            sr.sortingOrder = order;
+            if (goldArt != null)
+            {
+                sr.color = Color.white;
+                Fit(sr, pos, new Vector2(height, height), goldArt);
+            }
+            else
+            {
+                sr.color = GoldTextColor;
+                Fit(sr, pos, new Vector2(height, height), ProceduralSprites.Circle());
+            }
+
+            return sr;
         }
 
         public void Show()
@@ -127,7 +153,7 @@ namespace Puckmite.View
         public void SetReroll(int price, bool affordable)
         {
             _rerollAffordable = affordable;
-            SetText(_rerollCost, price + "G");
+            SetText(_rerollCost, price.ToString());
             _rerollCost.color = affordable ? GoldTextColor : DeniedTextColor;
             _rerollBg.color = _rerollUsesArt
                 ? (affordable ? Color.white : BarDimmed)
@@ -174,7 +200,12 @@ namespace Puckmite.View
                 slot.Price.gameObject.SetActive(true);
             }
 
-            SetText(slot.Price, price + "G");
+            if (!slot.PriceIcon.gameObject.activeSelf)
+            {
+                slot.PriceIcon.gameObject.SetActive(true);
+            }
+
+            SetText(slot.Price, price.ToString());
             slot.Price.color = affordable ? GoldTextColor : DeniedTextColor;
         }
 
@@ -193,6 +224,11 @@ namespace Puckmite.View
             if (slot.Price.gameObject.activeSelf)
             {
                 slot.Price.gameObject.SetActive(false);
+            }
+
+            if (slot.PriceIcon.gameObject.activeSelf)
+            {
+                slot.PriceIcon.gameObject.SetActive(false);
             }
         }
 

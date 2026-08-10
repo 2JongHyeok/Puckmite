@@ -93,7 +93,8 @@ namespace Puckmite.View
 
         // Flat-colour silhouette material (PuckHero/SpriteSilhouette) behind the character outline.
         // The victory panel wears the picker dress (사용자 지정 2026-08-10); only the coin art remains.
-        [SerializeField] private Sprite _goldIconSprite; // promised path UI/Gold
+        [SerializeField] private Sprite _goldIconSprite;    // UI/gold (사용자 아트 2026-08-10)
+        [SerializeField] private Sprite _runHealIconSprite; // stat sheet Frame_5, the green heal heart
 
         private VictoryPanel _victoryPanel;
         private int _goldEarnedThisRun; // kill gold this run, for the victory panel's line and its double pick
@@ -1530,8 +1531,10 @@ namespace Puckmite.View
 
             // Only the next run's figure moves; RunStartHealth stays put so restarting this run is still
             // worth what it was. CampaignState.AdvanceRun (leaving the shop) is what promotes it.
+            int healthBefore = _actorHealth[0];
             Campaign.NextRunHealth = Mathf.Min(_actorHealth[0] + RunEndHeal(), BaseHealth(0));
             _actorHealth[0] = Campaign.NextRunHealth; // shown healed on the cleared board
+            int healed = _actorHealth[0] - healthBefore; // what the cap actually let through (사용자 지정: 패널에 표시)
 
             bool lastRun = Campaign.IsBossRun;
             if (lastRun && Campaign.Stage >= CampaignState.StageCount)
@@ -1541,14 +1544,14 @@ namespace Puckmite.View
                 return;
             }
 
-            _victoryPanel.Show(_goldEarnedThisRun); // its 상점으로 button is the way on (design doc 2.1)
+            _victoryPanel.Show(_goldEarnedThisRun, healed); // its 상점으로 button is the way on (design doc 2.1)
         }
 
         // The victory panel: built hidden with the fixed picks' numbers, shown by ClearRun. The panel is
         // pure view — the effects live here, on the campaign the controller already owns.
         private void BuildVictoryPanel()
         {
-            _victoryPanel = new VictoryPanel(transform, _goldIconSprite);
+            _victoryPanel = new VictoryPanel(transform, _goldIconSprite, _runHealIconSprite);
             _victoryPanel.HealChosen = ApplyVictoryHeal;
             _victoryPanel.GoldChosen = ApplyVictoryGold;
             _victoryPanel.ShopChosen = GameFlow.LoadShop;

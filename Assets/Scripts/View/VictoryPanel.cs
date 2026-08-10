@@ -32,6 +32,7 @@ namespace Puckmite.View
         private static readonly Color OutlineTint = new Color(1f, 0.9f, 0.25f, 0.9f); // ring convention
 
         private readonly GameObject _root;
+        private readonly TextMeshPro _healLine;
         private readonly TextMeshPro _goldLine;
         private readonly GameObject _healButton;
         private readonly SpriteRenderer _healBg;
@@ -49,7 +50,7 @@ namespace Puckmite.View
 
         public bool IsShown => _shown;
 
-        public VictoryPanel(Transform parent, Sprite goldArt)
+        public VictoryPanel(Transform parent, Sprite goldArt, Sprite healArt)
         {
             _root = new GameObject("VictoryPanel");
             _root.transform.SetParent(parent, false);
@@ -62,9 +63,19 @@ namespace Puckmite.View
                 TextAlignmentOptions.Center, 14f, 24);
             title.color = HeadingTint;
 
+            // The run-end heal, above the gold line (사용자 지정 2026-08-10): green heal heart + amount.
+            SpriteRenderer healIcon = MakeIcon(_root.transform, "HealIcon", healArt, new Vector2(-2.4f, 4.9f), 0.9f, 23);
+            if (healArt == null)
+            {
+                healIcon.color = new Color(0.45f, 0.95f, 0.5f); // placeholder reads as the heal green
+            }
+
+            _healLine = MakeText(_root.transform, "HealLine", "x 0 회복!", new Vector2(2.25f, 4.9f),
+                new Vector2(6.6f, 1.4f), TextAlignmentOptions.MidlineLeft, 8f, 23);
+
             MakeIcon(_root.transform, "GoldIcon", goldArt, new Vector2(-2.4f, 3.6f), 0.9f, 23);
-            _goldLine = MakeText(_root.transform, "GoldLine", "x 0 획득!", new Vector2(1.9f, 3.6f),
-                new Vector2(7.4f, 1.4f), TextAlignmentOptions.MidlineLeft, 8f, 23);
+            _goldLine = MakeText(_root.transform, "GoldLine", "x 0 획득!", new Vector2(2.25f, 3.6f),
+                new Vector2(6.6f, 1.4f), TextAlignmentOptions.MidlineLeft, 8f, 23);
 
             MakeText(_root.transform, "ChoiceLabel", "추가 선택", new Vector2(0f, 2.0f), new Vector2(8f, 1.2f),
                 TextAlignmentOptions.Center, 6f, 23);
@@ -102,9 +113,10 @@ namespace Puckmite.View
             _root.SetActive(false);
         }
 
-        /// <summary>Resets the pick state, fills in the run's gold and starts the drop.</summary>
-        public void Show(int goldEarned)
+        /// <summary>Resets the pick state, fills in the run's gold and heal and starts the drop.</summary>
+        public void Show(int goldEarned, int healed)
         {
+            _healLine.text = $"x {healed} 회복!";
             _goldLine.text = $"x {goldEarned} 획득!";
             _goldButtonText.text = $"x {goldEarned} 추가 획득";
             _shown = true;
@@ -205,12 +217,16 @@ namespace Puckmite.View
         {
             GameObject go = new GameObject(name);
             go.transform.SetParent(parent, false);
-            go.transform.localPosition = pos;
 
             SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
             sr.sprite = art != null ? art : ProceduralSprites.Circle();
             sr.color = art != null ? Color.white : GoldTint;
-            go.transform.localScale = Vector3.one * (height / sr.sprite.bounds.size.y);
+            float scale = height / sr.sprite.bounds.size.y;
+            go.transform.localScale = Vector3.one * scale;
+            // Centre by bounds: the Aseprite imports carry bottom pivots, so placing the pivot at pos
+            // floats the drawing above its line (사용자 보고 2026-08-10 — the heal heart on the frame).
+            Bounds b = sr.sprite.bounds;
+            go.transform.localPosition = new Vector3(pos.x - b.center.x * scale, pos.y - b.center.y * scale, 0f);
             sr.sortingOrder = order;
             return sr;
         }

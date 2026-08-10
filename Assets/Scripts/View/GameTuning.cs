@@ -40,9 +40,9 @@ namespace Puckmite.View
         public int PriceRunHeal = 5;
         public int PriceMaxHealth = 10;
         public int GainAttack = 1;    // stat gained per point of settled Attack
-        public int GainShield = 2;
-        public int GainRunHeal = 5;   // 사용자 지정 2026-08-09 (기존 2)
-        public int GainMaxHealth = 5;
+        public int GainShield = 1;    // 사용자 지정 2026-08-10: 상점 강화량 전부 1
+        public int GainRunHeal = 1;
+        public int GainMaxHealth = 1;
         public int ShopStonePrice = 15;        // extra shop stone, permanent from this visit on (사용자 지정 2026-08-10)
         public int ShopStonePriceStep = 15;    // added per stone already bought — the price climbs for the campaign
         public int RerollBasePrice = 5;        // every reroll, flat (사용자 지정 2026-08-10: 가격 상승 없음)

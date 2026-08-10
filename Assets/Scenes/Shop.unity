@@ -303,6 +303,8 @@ MonoBehaviour:
   _healthIconSprite: {fileID: 7172269534363851296, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _shieldIconSprite: {fileID: -6791987299007039944, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _attackIconSprite: {fileID: 3994866376848337748, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _runHealIconSprite: {fileID: 2981439225445455365, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
+  _goldIconSprite: {fileID: -20456303727128179, guid: 52ba07687a5b9324994ac055cf2c4312, type: 3}
 --- !u!4 &1264881507
 Transform:
   m_ObjectHideFlags: 0

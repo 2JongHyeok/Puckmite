@@ -35,9 +35,9 @@ MonoBehaviour:
   PriceRunHeal: 5
   PriceMaxHealth: 10
   GainAttack: 1
-  GainShield: 2
-  GainRunHeal: 5
-  GainMaxHealth: 5
+  GainShield: 1
+  GainRunHeal: 1
+  GainMaxHealth: 1
   ShopStonePrice: 15
   ShopStonePriceStep: 15
   RerollBasePrice: 5
@@ -45,7 +45,7 @@ MonoBehaviour:
   BattleStonePrice: 25
   NoStoneTurnDelay: 0.8
   EnemyAiEnabled: 1
-  AiDifficulty: 4
+  AiDifficulty: 1
   EnemyThinkDelay: 0.8
   AiBuffAttackWeight: 1
   AiBuffShieldWeight: 1

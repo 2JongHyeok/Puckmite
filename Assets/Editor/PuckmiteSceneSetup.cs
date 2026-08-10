@@ -184,7 +184,7 @@ namespace Puckmite.EditorTools
 
                 // Optional art slots: quiet when the file does not exist yet (the controller renders
                 // placeholders), so no warnings pile up while the art is still being drawn.
-                SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/Gold");
+                SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/gold"); // 사용자 아트 2026-08-10
                 SetOptionalSprite(controller, "_skipButtonSprite", "Assets/Art/Sprites/UI/btn_skip_roll");
                 WireAudioClip(controller, "_sfxBossSkill", "Assets/Sound/SFX/boss_skill.wav");
                 WireStatIcons(controller);
@@ -223,6 +223,7 @@ namespace Puckmite.EditorTools
                 SetOptionalSprite(controller, "_rollButtonSprite", "Assets/Art/Sprites/UI/btn_shop_roll");
                 SetOptionalSprite(controller, "_buyStoneButtonSprite", "Assets/Art/Sprites/UI/btn_shop_buy_stone");
                 SetOptionalSprite(controller, "_leaveButtonSprite", "Assets/Art/Sprites/UI/btn_shop_leave");
+                SetOptionalSprite(controller, "_goldIconSprite", "Assets/Art/Sprites/UI/gold"); // 가격·보유 골드의 코인 (사용자 아트 2026-08-10)
 
                 // The player standing top-centre with battle-style stat rows (사용자 지정 2026-08-10):
                 // the hero art and all four stat icons (the pebble also feeds the side panel's count).
@@ -443,14 +444,15 @@ namespace Puckmite.EditorTools
         private const string StatIconSheetPath = "Assets/Art/Sprites/UI/stat_icons_sheet.aseprite";
 
         // The stat icons live in one Aseprite sheet, one icon per frame in draw order: health, shield,
-        // attack, stones (Frame_4, the dark stone, is reserved — 2026-08-08 user decision). Reordering
-        // frames in the file shifts this mapping. Falls back to the individual promised files when the
-        // sheet or a frame is missing.
+        // attack, stones (Frame_4, the dark stone, is reserved — 2026-08-08 user decision), and the
+        // green heal heart appended as Frame_5 (사용자 아트 2026-08-10: 체력 회복 전용 — 최대 체력은
+        // 빨간 하트 그대로). Reordering frames in the file shifts this mapping. Falls back to the
+        // individual promised files when the sheet or a frame is missing.
         private static void WireStatIcons(Object controller)
         {
-            string[] fields = { "_healthIconSprite", "_shieldIconSprite", "_attackIconSprite", "_stoneIconSprite" };
-            string[] frames = { "Frame_0", "Frame_1", "Frame_2", "Frame_3" };
-            string[] fallbacks = { "StatHealth", "StatShield", "StatAttack", "StatStones" };
+            string[] fields = { "_healthIconSprite", "_shieldIconSprite", "_attackIconSprite", "_stoneIconSprite", "_runHealIconSprite" };
+            string[] frames = { "Frame_0", "Frame_1", "Frame_2", "Frame_3", "Frame_5" };
+            string[] fallbacks = { "StatHealth", "StatShield", "StatAttack", "StatStones", "StatRunHeal" };
 
             Dictionary<string, Sprite> byName = new Dictionary<string, Sprite>();
             foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(StatIconSheetPath))

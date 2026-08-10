@@ -302,9 +302,8 @@ MonoBehaviour:
   _shieldIconSprite: {fileID: -6791987299007039944, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _attackIconSprite: {fileID: 3994866376848337748, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _stoneIconSprite: {fileID: -3485401350434060962, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
-  _victoryPanelSprite: {fileID: 0}
-  _victoryButtonSprite: {fileID: 0}
-  _goldIconSprite: {fileID: 0}
+  _goldIconSprite: {fileID: -20456303727128179, guid: 52ba07687a5b9324994ac055cf2c4312, type: 3}
+  _runHealIconSprite: {fileID: 2981439225445455365, guid: fe754df713868d148a2e9ccac3cd72a9, type: 3}
   _skipButtonSprite: {fileID: -2482026305057344012, guid: f02f8a442281e2949b6a758c06be66a3, type: 3}
   _sfxBossSkill: {fileID: 8300000, guid: d6838e263d127004cba89d7c700890af, type: 3}
   _cellDebuffPrefab: {fileID: -2253911629886400664, guid: 17964efde5fe44142a52a2070511ca26, type: 3}
