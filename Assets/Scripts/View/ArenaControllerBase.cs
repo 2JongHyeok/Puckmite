@@ -1529,7 +1529,15 @@ namespace Puckmite.View
             }
 
             clone.SetVelocity(cueId, launchVelocity);
-            clone.SetHealth(cueId, 1_000_000); // never destroy the cue in the preview (design doc 6.2)
+
+            // Everything in the clone is invincible, not just the cue (design doc 6.2 kept the cue alive):
+            // a stone the hit would kill was removed at step end, before the readout below could look it
+            // up, so a lethal aim drew no impact ghost or arrow (사용자 보고 2026-08-10). Kept alive it
+            // gets the same readout a survivor does, and the one-bumper removal below still drops it.
+            for (int i = 0; i < clone.Pucks.Count; i++)
+            {
+                clone.SetHealth(clone.Pucks[i].Id, 1_000_000);
+            }
 
             _previewPoints.Clear();
             if (!clone.TryGetPuck(cueId, out Puck cue))

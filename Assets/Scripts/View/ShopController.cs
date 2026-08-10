@@ -165,6 +165,7 @@ namespace Puckmite.View
         // waits here for OK/cancel instead of landing straight away. Korean, in the leave dialog's dress
         // (사용자 지정 2026-08-10 — 구 IMGUI 영어 창 대체); built lazily on the first open.
         private bool _confirmReplaceOpen;
+        private int _replaceOpenedFrame; // the frame the dialog opened — its opening click must not press its buttons
         private int _confirmCol;
         private int _confirmRow;
         private GameObject _replaceConfirmRoot;
@@ -312,7 +313,16 @@ namespace Puckmite.View
             Campaign.BonusAttack += gained.Attack * _tuning.GainAttack;
             Campaign.BonusShield += gained.Shield * _tuning.GainShield;
             Campaign.BonusRunHeal += gained.RunHeal * _tuning.GainRunHeal;
-            Campaign.BonusMaxHealth += gained.MaxHealth * _tuning.GainMaxHealth;
+            int gainedMaxHealth = gained.MaxHealth * _tuning.GainMaxHealth;
+            Campaign.BonusMaxHealth += gainedMaxHealth;
+
+            // Bought max health heals the same amount on the spot (사용자 지정 2026-08-10). NextRunHealth
+            // 0 means full and stays untouched — full before is full after. A carried figure was capped at
+            // the old max when it was written, so topping it up cannot pass the new max.
+            if (gainedMaxHealth > 0 && Campaign.NextRunHealth > 0)
+            {
+                Campaign.NextRunHealth += gainedMaxHealth;
+            }
 
             Campaign.AdvanceRun();
 
@@ -431,16 +441,19 @@ namespace Puckmite.View
         }
 
         // Fills every slot afresh, bought-out ones included (design doc 5.3), each slot drawn from the
-        // five offer weights (사용자 지정 2026-08-10: 공격 10%·쉴드 30%·최대체력 30%·회복 25%·전투
-        // 스톤 5%), normalised by their sum so live tuning cannot break the draw. View-level
+        // five offer weights in GameTuning, normalised by their sum so live tuning cannot break the draw.
+        // The battle stone deals at most one card per roll, and none once the roster cap is bought full
+        // (사용자 지정 2026-08-10) — its weight drops out and the cells split the draw. View-level
         // UnityEngine.Random — the sim's determinism is untouched.
         private void RerollOffers()
         {
             _shopOffers.Clear();
+            bool battleStoneAllowed = !BattleStonesCapped;
             for (int i = 0; i < ShopOfferSlots; i++)
             {
+                float battleStoneChance = battleStoneAllowed ? _tuning.OfferBattleStoneChance : 0f;
                 float total = _tuning.OfferAttackChance + _tuning.OfferShieldChance
-                    + _tuning.OfferMaxHealthChance + _tuning.OfferRunHealChance + _tuning.OfferBattleStoneChance;
+                    + _tuning.OfferMaxHealthChance + _tuning.OfferRunHealChance + battleStoneChance;
                 if (total <= 0f)
                 {
                     // Every weight zeroed out (a live-tuning corner): fall back to a plain uniform cell.
@@ -449,9 +462,10 @@ namespace Puckmite.View
                 }
 
                 float r = Random.value * total;
-                if ((r -= _tuning.OfferBattleStoneChance) < 0f)
+                if ((r -= battleStoneChance) < 0f)
                 {
                     _shopOffers.Add(new ShopOffer { Type = OfferType.BattleStone });
+                    battleStoneAllowed = false; // one card per roll at most
                 }
                 else if ((r -= _tuning.OfferAttackChance) < 0f)
                 {
@@ -599,11 +613,17 @@ namespace Puckmite.View
             _merchantOpen = false;
         }
 
+        // The roster caps at 4 battle stones (사용자 지정 2026-08-10): the granted 2 plus 2 bought. At the
+        // cap the roll stops offering the card (see RerollOffers); the buy guard below backs the rule.
+        private const int MaxBattleStones = 4;
+
+        private bool BattleStonesCapped => _tuning.PlayerStoneCount + Campaign.ExtraBattleStones >= MaxBattleStones;
+
         // A battle stone lands in the campaign, not on this board: one more roster stone from the next run
         // until defeat (design doc 5.6). Nothing to place, so the merchant screen stays open.
         private void BuyBattleStone(int slot)
         {
-            if (Campaign.Gold < _tuning.BattleStonePrice || _shopThrowing)
+            if (Campaign.Gold < _tuning.BattleStonePrice || _shopThrowing || BattleStonesCapped)
             {
                 return;
             }
@@ -1441,6 +1461,7 @@ namespace Puckmite.View
 
             if (open)
             {
+                _replaceOpenedFrame = Time.frameCount;
                 ShopCell cell = Campaign.ShopBoard.CellAt(_confirmCol, _confirmRow);
                 _replaceConfirmBody.text =
                     $"{KoreanUpgradeName(cell.Kind)} 칸(레벨 {cell.Level})을 {KoreanUpgradeName(_pendingCell)} 칸으로 교체합니다.\n기존 레벨은 사라집니다.";
@@ -1452,6 +1473,14 @@ namespace Puckmite.View
         private void UpdateReplaceConfirm()
         {
             if (!_confirmReplaceOpen || _replaceConfirmRoot == null)
+            {
+                return;
+            }
+
+            // The click that opened the dialog is still pressed this frame (wasPressedThisFrame holds all
+            // frame, and this runs after HandleShopInput) — a board cell under the fresh [교체]/[취소]
+            // would take that same click as an answer (사용자 보고 2026-08-10). Input starts next frame.
+            if (Time.frameCount == _replaceOpenedFrame)
             {
                 return;
             }
