@@ -56,7 +56,7 @@ namespace Puckmite.Game
                 new RunSpec(RunMonsters.RandomExceptSlime, 1,  20,  0, 2, 1), // 1-2
                 new RunSpec(RunMonsters.Random,            2,  20,  0, 2, 1), // 1-3
                 new RunSpec(RunMonsters.Random,            3,  20,  0, 2, 1), // 1-4
-                new RunSpec(RunMonsters.Boss,              1,  50, 10, 5, 2), // 1-5
+                new RunSpec(RunMonsters.Boss,              1, 100, 30, 10, 2), // 1-5 (사용자 지정 2026-08-10: 100/30/10)
             },
             new[]
             {

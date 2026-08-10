@@ -1461,8 +1461,11 @@ namespace Puckmite.View
         {
             if (actor != 0)
             {
-                Campaign.Gold += _tuning.GoldPerKill; // gold comes from taking enemies down (design doc 5.6)
-                _goldEarnedThisRun += _tuning.GoldPerKill;
+                // Gold comes from taking enemies down (design doc 5.6); the boss pays its own figure
+                // (사용자 지정 2026-08-10). Boss runs field no other enemies.
+                int bounty = Campaign.IsBossRun ? _tuning.GoldPerBossKill : _tuning.GoldPerKill;
+                Campaign.Gold += bounty;
+                _goldEarnedThisRun += bounty;
             }
 
             _actorDead[actor] = true;
@@ -2598,6 +2601,24 @@ namespace Puckmite.View
                 if (_actorDead[actor])
                 {
                     SetOutline(actor, default, false);
+
+                    // A dead enemy's stat block goes down with it (사용자 지정 2026-08-10); the
+                    // player's stays up for the end screen.
+                    if (actor != 0)
+                    {
+                        for (int r = 0; r < StatRowCount; r++)
+                        {
+                            if (_statRowTexts[actor][r].gameObject.activeSelf)
+                            {
+                                _statRowTexts[actor][r].gameObject.SetActive(false);
+                            }
+
+                            if (_statRowIcons[actor][r].gameObject.activeSelf)
+                            {
+                                _statRowIcons[actor][r].gameObject.SetActive(false);
+                            }
+                        }
+                    }
 
                     // Death sink (사용자 지정 2026-08-10): slide below the feet line, then stay hidden.
                     SpriteRenderer deadBody = _characterBodies[actor];

@@ -34,6 +34,7 @@ namespace Puckmite.View
 
         [Header("Shop — 임시 (가격·강화량은 10.1에서 미정)")]
         public int GoldPerKill = 10;      // gold for each enemy taken down (design doc 5.6)
+        public int GoldPerBossKill = 30;  // the boss pays its own figure (사용자 지정 2026-08-10)
         public int ShopStonesPerVisit = 1; // stones granted each visit (design doc 5.4)
         public int PriceAttack = 5;
         public int PriceShield = 5;

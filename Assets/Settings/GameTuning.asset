@@ -28,7 +28,8 @@ MonoBehaviour:
   PlayerBaseShield: 0
   RunEndHeal: 5
   PlayerStoneCount: 2
-  GoldPerKill: 20
+  GoldPerKill: 5
+  GoldPerBossKill: 30
   ShopStonesPerVisit: 1
   PriceAttack: 5
   PriceShield: 5
@@ -45,7 +46,7 @@ MonoBehaviour:
   BattleStonePrice: 25
   NoStoneTurnDelay: 0.8
   EnemyAiEnabled: 1
-  AiDifficulty: 1
+  AiDifficulty: 2
   EnemyThinkDelay: 0.8
   AiBuffAttackWeight: 1
   AiBuffShieldWeight: 1
