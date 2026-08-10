@@ -102,8 +102,8 @@ namespace Puckmite.View
         private TextMeshPro _turnText; // the left info column's turn line ("플레이어 턴" / "적 턴 진행중…")
         private float _turnDotTimer;
 
-        private const float TooltipWidth = 7.5f;
-        private const float TooltipHeight = 4.2f;
+        private const float TooltipWidth = 11.25f;  // 사용자 지정 2026-08-10: 적 툴팁 1.5배
+        private const float TooltipHeight = 6.3f;
         private GameObject _tooltipRoot;    // enemy tooltip: creature name + ability, beside the hovered body
         private TextMeshPro _tooltipTitle;
         private TextMeshPro _tooltipBody;
@@ -224,9 +224,9 @@ namespace Puckmite.View
         }
 
         // Corrupted inner-cell indices with, in lock-step, the boss turns each has left. A cell lasts
-        // DebuffCellTurns boss turns (사용자 지정 2026-08-10: 2턴 — the player feels it twice), so two
-        // casts' cells can sit on the board together; re-corrupting a cell restarts its clock.
-        private const int DebuffCellTurns = 2;
+        // DebuffCellTurns boss turns (사용자 지정 2026-08-10: 1턴으로 감소 — 다음 보스 턴에 소멸);
+        // re-corrupting a cell restarts its clock.
+        private const int DebuffCellTurns = 1;
         private readonly List<int> _debuffCells = new List<int>();
         private readonly List<int> _debuffCellTurns = new List<int>();
         // The hole outlives its cast (사용자 지정 2026-08-10: 사라진 칸은 3턴 뒤 복귀) on the same
@@ -687,7 +687,7 @@ namespace Puckmite.View
                     SettleCurrentActor();          // stones lost here go back to the hand as pending
 
                     // A boss turn (run 5 of either stage): corrupted cells and the hole age out on
-                    // their boss-turn clocks (2 and 3), and a fresh ability is cast — then it rolls like
+                    // their boss-turn clocks (1 and 3), and a fresh ability is cast — then it rolls like
                     // any enemy (사용자 지정 2026-08-10). With nothing left to roll it takes the
                     // no-stone beat below like everyone else.
                     if (_currentActor != 0 && Campaign.IsBossRun)
@@ -1701,7 +1701,9 @@ namespace Puckmite.View
                     }
 
                     int gain = value * p.Level;
-                    bool corrupted = CellCorruptedFor(actor, index);
+                    // Corruption bites everyone alike — the boss's own stones included (사용자 지정
+                    // 2026-08-10: 면역 도입 후 같은 날 철회).
+                    bool corrupted = _debuffCells.Contains(index);
                     switch (layout.KindOf(col, row))
                     {
                         case BuffKind.Attack:
@@ -1716,19 +1718,6 @@ namespace Puckmite.View
                     }
                 }
             }
-        }
-
-        // Whether a corrupted cell counts as corrupted FOR this actor: the boss is immune to its own
-        // debuff cells (사용자 지정 2026-08-10) — its stones take them at face value. Boss runs field no
-        // other enemies, so "the enemy actor in a boss run" is the boss itself.
-        private bool CellCorruptedFor(int actor, int index)
-        {
-            if (actor != 0 && Campaign.IsBossRun)
-            {
-                return false;
-            }
-
-            return _debuffCells.Contains(index);
         }
 
         // Turn start (design doc 3.6): the actor's buff resets, leaving base stats only until it rolls again.
@@ -1786,7 +1775,7 @@ namespace Puckmite.View
                     int index = _occupiedCells[c];
                     int col = index % BoardCells.Size;
                     int row = index / BoardCells.Size;
-                    if (layout.ValueOf(col, row) <= 0 || CellCorruptedFor(actor, index))
+                    if (layout.ValueOf(col, row) <= 0 || _debuffCells.Contains(index))
                     {
                         continue;
                     }
@@ -2832,9 +2821,9 @@ namespace Puckmite.View
             bg.color = new Color(0.10f, 0.12f, 0.18f, 0.95f);
             bg.sortingOrder = 17;
 
-            _tooltipTitle = MakeTooltipText("Title", new Vector2(0f, TooltipHeight * 0.5f - 0.85f), new Vector2(TooltipWidth - 0.8f, 1.1f), 7f);
+            _tooltipTitle = MakeTooltipText("Title", new Vector2(0f, TooltipHeight * 0.5f - 1.28f), new Vector2(TooltipWidth - 1.2f, 1.65f), 10.5f);
             _tooltipTitle.fontStyle = FontStyles.Bold;
-            _tooltipBody = MakeTooltipText("Body", new Vector2(0f, -0.5f), new Vector2(TooltipWidth - 0.9f, TooltipHeight - 2.1f), 5f);
+            _tooltipBody = MakeTooltipText("Body", new Vector2(0f, -0.75f), new Vector2(TooltipWidth - 1.35f, TooltipHeight - 3.15f), 7.5f);
 
             _tooltipRoot.SetActive(false);
         }

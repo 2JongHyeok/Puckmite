@@ -28,7 +28,7 @@ MonoBehaviour:
   PlayerBaseShield: 0
   RunEndHeal: 5
   PlayerStoneCount: 2
-  GoldPerKill: 5
+  GoldPerKill: 10
   GoldPerBossKill: 30
   ShopStonesPerVisit: 1
   PriceAttack: 5
@@ -37,7 +37,7 @@ MonoBehaviour:
   PriceMaxHealth: 10
   GainAttack: 1
   GainShield: 1
-  GainRunHeal: 1
+  GainRunHeal: 2
   GainMaxHealth: 1
   ShopStonePrice: 15
   ShopStonePriceStep: 15
