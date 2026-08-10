@@ -162,10 +162,17 @@ namespace Puckmite.View
         private int _pendingSlot = -1;
 
         // Replace warning (design doc 5.1): a different kind wipes the cell's levels, so the placement
-        // waits here for OK/cancel instead of landing straight away.
+        // waits here for OK/cancel instead of landing straight away. Korean, in the leave dialog's dress
+        // (사용자 지정 2026-08-10 — 구 IMGUI 영어 창 대체); built lazily on the first open.
         private bool _confirmReplaceOpen;
         private int _confirmCol;
         private int _confirmRow;
+        private GameObject _replaceConfirmRoot;
+        private TextMeshPro _replaceConfirmBody;
+        private SpriteRenderer _replaceGoOutline;
+        private SpriteRenderer _replaceGoBg;
+        private SpriteRenderer _replaceCancelOutline;
+        private SpriteRenderer _replaceCancelBg;
 
         // The view arrays are sized once per Build and never grow (see ArenaControllerBase), so the roster
         // is pre-sized for every stone this visit could possibly field: the granted ones plus a fixed
@@ -270,6 +277,7 @@ namespace Puckmite.View
             UpdateMerchantPanel();
             UpdateShopSideUi();
             UpdateLeaveConfirm();
+            UpdateReplaceConfirm();
             UpdateShopHeroStats();
             TickLeaveFlights();
             UpdateGhost();
@@ -522,19 +530,7 @@ namespace Puckmite.View
             }
         }
 
-        private static string UpgradeName(UpgradeKind kind)
-        {
-            switch (kind)
-            {
-                case UpgradeKind.Attack: return "Attack";
-                case UpgradeKind.Shield: return "Shield";
-                case UpgradeKind.RunHeal: return "Run heal";
-                default: return "Max health";
-            }
-        }
-
-        // Player-facing kind names are Korean (the in-game UI language); UpgradeName stays English for
-        // the developer-facing log lines.
+        // Player-facing kind names are Korean (the in-game UI language).
         private static string KoreanUpgradeName(UpgradeKind kind)
         {
             switch (kind)
@@ -655,9 +651,9 @@ namespace Puckmite.View
 
             if (Campaign.ShopBoard.Preview(col, row, _pendingCell) == ShopPlacement.Replaced)
             {
-                _confirmReplaceOpen = true;
                 _confirmCol = col;
                 _confirmRow = row;
+                SetReplaceConfirmOpen(true);
                 return;
             }
 
@@ -1397,6 +1393,106 @@ namespace Puckmite.View
             }
         }
 
+        // The replace warning, in the leave dialog's dress (사용자 지정 2026-08-10): gold frame, dark
+        // box, gold title, [교체] / [취소] stacked. The body names both kinds in Korean.
+        private void BuildReplaceConfirm()
+        {
+            _replaceConfirmRoot = new GameObject("ReplaceConfirm");
+            _replaceConfirmRoot.transform.SetParent(transform, false);
+            _replaceConfirmRoot.transform.localPosition = new Vector3(0f, 6.25f, 0f);
+            Transform root = _replaceConfirmRoot.transform;
+
+            Vector2 panelSize = new Vector2(24f, 14f);
+            SideRect(root, "Frame", null, Vector2.zero, panelSize + new Vector2(0.3f, 0.3f), new Color(0.72f, 0.55f, 0.22f), 40);
+            SideRect(root, "PanelBg", null, Vector2.zero, panelSize, new Color(0.08f, 0.10f, 0.15f, 0.97f), 41);
+
+            TextMeshPro title = SideText(root, "Title", "칸을 교체하시겠습니까?", new Vector2(0f, 4.9f),
+                new Vector2(20f, 2.2f), TextAlignmentOptions.Center, 8f, 45);
+            title.color = new Color(1f, 0.85f, 0.35f);
+            _replaceConfirmBody = SideText(root, "Body", "", new Vector2(0f, 2.1f),
+                new Vector2(21f, 2.6f), TextAlignmentOptions.Center, 6f, 45);
+
+            Vector2 buttonSize = new Vector2(17.6f, 3.4f);
+            _replaceGoOutline = SideRect(root, "GoOutline", null, new Vector2(0f, -1.2f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
+            _replaceGoOutline.enabled = false;
+            _replaceGoBg = SideRect(root, "GoBg", null, new Vector2(0f, -1.2f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
+            SideText(root, "GoLabel", "교체", new Vector2(0f, -1.2f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
+
+            _replaceCancelOutline = SideRect(root, "CancelOutline", null, new Vector2(0f, -5.0f), buttonSize + new Vector2(0.4f, 0.4f), SideOutlineTint, 42);
+            _replaceCancelOutline.enabled = false;
+            _replaceCancelBg = SideRect(root, "CancelBg", null, new Vector2(0f, -5.0f), buttonSize, new Color(0.28f, 0.33f, 0.44f), 43);
+            SideText(root, "CancelLabel", "취소", new Vector2(0f, -5.0f), new Vector2(16f, 2.6f), TextAlignmentOptions.Center, 7f, 45);
+
+            _replaceConfirmRoot.SetActive(false);
+        }
+
+        private void SetReplaceConfirmOpen(bool open)
+        {
+            if (open && _replaceConfirmRoot == null)
+            {
+                BuildReplaceConfirm();
+            }
+
+            _confirmReplaceOpen = open;
+            if (_replaceConfirmRoot != null)
+            {
+                _replaceConfirmRoot.SetActive(open);
+            }
+
+            if (open)
+            {
+                ShopCell cell = Campaign.ShopBoard.CellAt(_confirmCol, _confirmRow);
+                _replaceConfirmBody.text =
+                    $"{KoreanUpgradeName(cell.Kind)} 칸(레벨 {cell.Level})을 {KoreanUpgradeName(_pendingCell)} 칸으로 교체합니다.\n기존 레벨은 사라집니다.";
+            }
+        }
+
+        // Hover, clicks and ESC for the replace warning. [교체] commits onto the cell; [취소]/ESC keeps
+        // the board as it was — the bought cell stays on the cursor for another spot or a right-click drop.
+        private void UpdateReplaceConfirm()
+        {
+            if (!_confirmReplaceOpen || _replaceConfirmRoot == null)
+            {
+                return;
+            }
+
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame)
+            {
+                SetReplaceConfirmOpen(false);
+                return;
+            }
+
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            Vector2 screen = mouse.position.ReadValue();
+            Vector2 world = ScreenToWorld(screen);
+            bool blocked = PointerOverShopGui(screen);
+            bool hoverGo = !blocked && InBounds(_replaceGoBg, world);
+            bool hoverCancel = !blocked && InBounds(_replaceCancelBg, world);
+            _replaceGoOutline.enabled = hoverGo;
+            _replaceCancelOutline.enabled = hoverCancel;
+
+            if (!mouse.leftButton.wasPressedThisFrame)
+            {
+                return;
+            }
+
+            if (hoverGo)
+            {
+                SetReplaceConfirmOpen(false);
+                CommitPendingCell(_confirmCol, _confirmRow);
+            }
+            else if (hoverCancel)
+            {
+                SetReplaceConfirmOpen(false);
+            }
+        }
+
         // Hover, clicks and ESC for the leave-confirm dialog. Only [전투로 이동] leaves; [뒤로가기] and
         // ESC return to the board with everything as it was (사용자 지정).
         private void UpdateLeaveConfirm()
@@ -1757,16 +1853,10 @@ namespace Puckmite.View
                 return;
             }
 
-            GUIStyle rich = new GUIStyle(GUI.skin.label) { richText = true };
-
-            // Modal screens, and IMGUI has no z-order: a control drawn earlier still takes the click even
-            // when something is painted over it. So while one is up, nothing else is drawn at all —
-            // otherwise a miss near its buttons would hit "Roll stones" or "Leave shop" underneath, both
-            // of which end the visit for good. The replace warning outranks the merchant: it can only be
-            // open while the merchant is closed, but check it first all the same.
-            if (_confirmReplaceOpen)
+            // The dialogs are world-space sprites now (replace warning included, 사용자 지정
+            // 2026-08-10); IMGUI draws nothing under them so no board tooltip bleeds over a dialog.
+            if (_confirmReplaceOpen || _leaveConfirmOpen)
             {
-                DrawReplaceConfirm(rich);
                 return;
             }
 
@@ -1776,13 +1866,6 @@ namespace Puckmite.View
             if (_merchantOpen)
             {
                 DrawMerchantTooltip();
-                return;
-            }
-
-            // The leave-confirm panel is world-space sprites; IMGUI draws nothing under it so no board
-            // tooltip bleeds over the dialog.
-            if (_leaveConfirmOpen)
-            {
                 return;
             }
 
@@ -1842,30 +1925,5 @@ namespace Puckmite.View
             DrawCursorTooltip(text);
         }
 
-        // The replace warning (design doc 5.1): OK replaces the cell and its levels are gone, cancel keeps
-        // the board as it was — the bought cell stays on the cursor for another spot or a right-click drop.
-        private void DrawReplaceConfirm(GUIStyle rich)
-        {
-            GUI.Box(new Rect(0f, 0f, Screen.width, Screen.height), GUIContent.none);
-
-            float midX = Screen.width * 0.5f;
-            float midY = Screen.height * 0.5f;
-            GUI.Box(new Rect(midX - 220f, midY - 70f, 440f, 140f), GUIContent.none);
-
-            ShopCell cell = Campaign.ShopBoard.CellAt(_confirmCol, _confirmRow);
-            GUI.Label(new Rect(midX - 200f, midY - 52f, 400f, 48f),
-                $"Replace <b>{UpgradeName(cell.Kind)}</b> (level {cell.Level}) with <b>{UpgradeName(_pendingCell)}</b>?\nAll of its levels will be lost.", rich);
-
-            if (GUI.Button(new Rect(midX - 110f, midY + 12f, 100f, 32f), "Replace"))
-            {
-                _confirmReplaceOpen = false;
-                CommitPendingCell(_confirmCol, _confirmRow);
-            }
-
-            if (GUI.Button(new Rect(midX + 10f, midY + 12f, 100f, 32f), "Cancel"))
-            {
-                _confirmReplaceOpen = false;
-            }
-        }
     }
 }

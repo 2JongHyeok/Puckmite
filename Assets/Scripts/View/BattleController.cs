@@ -3140,8 +3140,34 @@ namespace Puckmite.View
             }
 
             Vector2 screen = mouse.position.ReadValue();
-            if (PointerOverHud(screen) || !BoardCellAt(ScreenToWorld(screen), out int col, out int row)
-                || !_sim.Layout.IsBuff(col, row))
+            Vector2 world = ScreenToWorld(screen);
+            if (PointerOverHud(screen) || !BoardCellAt(world, out int col, out int row))
+            {
+                return;
+            }
+
+            // A cell the boss swallowed reads as the drop it now is, not as the buff it used to be
+            // (사용자 지정 2026-08-10 — 문구도 사용자 지정).
+            if (col + row * BoardCells.Size == _sim.HoleCell)
+            {
+                DrawCursorTooltip("낭떠러지\n스톤이 절반 이상 걸치면 스톤이 칸 아래로 떨어짐");
+                return;
+            }
+
+            // The outer damage ring (사용자 지정 2026-08-10) — quiet while the cursor sits on the
+            // player's waiting ghost, which parks on this very ring to be grabbed.
+            if (BoardCells.TypeOf(col, row) == CellType.Damage)
+            {
+                if (GhostVisible() && (world - _ghost.Position).magnitude <= GrabRadius())
+                {
+                    return;
+                }
+
+                DrawCursorTooltip($"데미지 칸\n자신의 턴이 돌아올 때, 해당 칸 위에 있는 스톤 체력 -{_tuning.CellDamage}");
+                return;
+            }
+
+            if (!_sim.Layout.IsBuff(col, row))
             {
                 return;
             }
